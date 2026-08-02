@@ -1,7 +1,7 @@
 import { logger } from "../utils/logger.js";
 import type { MarketDataProvider, Instrument } from "../providers/types.js";
 import type { Tick } from "../models/Tick.js";
-import { normalizeTick, stampTick, validateTick } from "./pipeline.js";
+import { isStaleTick, normalizeTick, stampTick, validateTick } from "./pipeline.js";
 import { BoundedQueue } from "./queue.js";
 import { CandleAggregator } from "./candles/CandleAggregator.js";
 import { parseTimeframes } from "./candles/timeframes.js";
@@ -14,6 +14,8 @@ export interface MarketEngineOptions {
   instruments: Instrument[];
   enabledTimeframes: string;
   historyThrottleMs: number;
+  /** Ignore ticks whose exchange timestamp is older than this (ms). 0 disables. */
+  maxTickAgeMs?: number;
 }
 
 export class MarketEngine {
@@ -28,6 +30,13 @@ export class MarketEngine {
   private candleFlushTimer: NodeJS.Timeout | null = null;
   private draining = false;
   private stopping = false;
+  private staleTickCount = 0;
+  private lastStaleLogAt = 0;
+  private lastLiveTickTs = 0;
+
+  private get maxTickAgeMs(): number {
+    return this.opts.maxTickAgeMs ?? 120_000;
+  }
 
   constructor(private opts: MarketEngineOptions) {
     this.aggregator = new CandleAggregator(parseTimeframes(opts.enabledTimeframes));
@@ -56,7 +65,11 @@ export class MarketEngine {
     }, 60_000);
     // Keep the currently-open candles persisted so market_candles is never
     // empty while the market is open (writer throttles duplicate writes).
-    this.candleFlushTimer = setInterval(() => this.aggregator.flushOpen(), 5_000);
+    this.candleFlushTimer = setInterval(() => {
+      // Only keep persisting open candles while live ticks are still arriving.
+      if (this.maxTickAgeMs > 0 && Date.now() - this.lastLiveTickTs > this.maxTickAgeMs) return;
+      this.aggregator.flushOpen();
+    }, 5_000);
     this.drain();
   }
 
@@ -73,6 +86,30 @@ export class MarketEngine {
   private onTick(raw: Tick): void {
     if (!validateTick(raw)) return;
     const tick = stampTick(normalizeTick(raw));
+
+    // Market closed / replayed snapshot: the feed re-sends the last trade of the
+    // previous session. Never open or update a candle from it — wait for the
+    // first genuinely live tick.
+    if (isStaleTick(tick, this.maxTickAgeMs)) {
+      this.staleTickCount++;
+      const now = Date.now();
+      if (now - this.lastStaleLogAt > 60_000) {
+        this.lastStaleLogAt = now;
+        logger.info(
+          {
+            symbol: tick.symbol,
+            exchangeTs: tick.exchangeTs,
+            ageSec: tick.exchangeTs ? Math.floor((now - tick.exchangeTs) / 1000) : undefined,
+            maxTickAgeMs: this.maxTickAgeMs,
+            staleTickCount: this.staleTickCount,
+          },
+          "[engine] stale tick ignored (market likely closed) — waiting for live tick",
+        );
+      }
+      return;
+    }
+
+    this.lastLiveTickTs = Date.now();
     this.tickCounter++;
     this.queue.push(tick);
     if (!this.draining) this.drain();
@@ -109,6 +146,13 @@ export class MarketEngine {
       dbStatus: this.rates.healthy && this.history.healthy && this.candles.healthy,
       reconnectCount: s.reconnectCount,
       engineUptimeSec: Math.floor((Date.now() - this.started) / 1000),
+      staleTicksIgnored: this.staleTickCount,
+      lastLiveTickTime: this.lastLiveTickTs
+        ? new Date(this.lastLiveTickTs).toISOString()
+        : undefined,
+      marketLive:
+        this.maxTickAgeMs <= 0 ||
+        (this.lastLiveTickTs > 0 && Date.now() - this.lastLiveTickTs <= this.maxTickAgeMs),
     };
   }
 }

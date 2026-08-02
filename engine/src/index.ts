@@ -23,6 +23,7 @@ async function main(): Promise<void> {
     instruments,
     enabledTimeframes: env.ENABLED_TIMEFRAMES,
     historyThrottleMs: env.HISTORY_THROTTLE_MS,
+    maxTickAgeMs: env.MAX_TICK_AGE_MS,
   });
 
   const health = new HealthServer(env.PORT, () => engine.snapshot());

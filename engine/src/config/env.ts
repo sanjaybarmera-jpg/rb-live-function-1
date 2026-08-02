@@ -14,6 +14,8 @@ const schema = z.object({
 
   ENABLED_TIMEFRAMES: z.string().default("1m"),
   HISTORY_THROTTLE_MS: z.coerce.number().int().nonnegative().default(1000),
+  /** Drop ticks whose exchange timestamp is older than this (ms). 0 disables the guard. */
+  MAX_TICK_AGE_MS: z.coerce.number().int().nonnegative().default(120_000),
   PORT: z.coerce.number().int().positive().default(8080),
   LOG_LEVEL: z
     .enum(["trace", "debug", "info", "warn", "error", "fatal"])
