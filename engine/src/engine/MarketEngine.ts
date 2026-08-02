@@ -54,16 +54,21 @@ export class MarketEngine {
       );
       this.tickCounter = 0;
     }, 60_000);
+    // Keep the currently-open candles persisted so market_candles is never
+    // empty while the market is open (writer throttles duplicate writes).
+    this.candleFlushTimer = setInterval(() => this.aggregator.flushOpen(), 5_000);
     this.drain();
   }
 
   async stop(): Promise<void> {
     this.stopping = true;
     if (this.tickReportTimer) clearInterval(this.tickReportTimer);
+    if (this.candleFlushTimer) clearInterval(this.candleFlushTimer);
     await this.opts.provider.disconnect();
     await this.rates.stop();
     logger.info("[engine] stopped");
   }
+
 
   private onTick(raw: Tick): void {
     if (!validateTick(raw)) return;
