@@ -59,6 +59,7 @@ export class MarketEngine {
     this.stopping = true;
     if (this.tickReportTimer) clearInterval(this.tickReportTimer);
     await this.opts.provider.disconnect();
+    await this.rates.stop();
     logger.info("[engine] stopped");
   }
 
@@ -78,10 +79,8 @@ export class MarketEngine {
         const tick = this.queue.shift();
         if (!tick) break;
         try {
-          await Promise.all([
-            this.rates.write(tick).catch(() => {}),
-            this.history.write(tick).catch(() => {}),
-          ]);
+          this.rates.write(tick);
+          await this.history.write(tick).catch(() => {});
           this.aggregator.ingest(tick);
         } catch (err) {
           logger.error({ err }, "[engine] pipeline error");
