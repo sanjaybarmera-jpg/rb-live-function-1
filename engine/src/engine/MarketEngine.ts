@@ -25,6 +25,7 @@ export class MarketEngine {
   private started = Date.now();
   private tickCounter = 0;
   private tickReportTimer: NodeJS.Timeout | null = null;
+  private candleFlushTimer: NodeJS.Timeout | null = null;
   private draining = false;
   private stopping = false;
 
@@ -33,12 +34,13 @@ export class MarketEngine {
     this.history = new RatesHistoryWriter(opts.historyThrottleMs);
 
     opts.provider.onTick((t) => this.onTick(t));
-    this.aggregator.onCandle(({ candle }) => {
-      this.candles.write(candle).catch(() => {
+    this.aggregator.onCandle(({ candle, closed }) => {
+      this.candles.write(candle, closed).catch(() => {
         /* logged in writer */
       });
     });
   }
+
 
   async start(): Promise<void> {
     logger.info({ provider: this.opts.provider.name }, "[engine] starting");
