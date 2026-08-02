@@ -146,6 +146,13 @@ export class MarketEngine {
       dbStatus: this.rates.healthy && this.history.healthy && this.candles.healthy,
       reconnectCount: s.reconnectCount,
       engineUptimeSec: Math.floor((Date.now() - this.started) / 1000),
+      staleTicksIgnored: this.staleTickCount,
+      lastLiveTickTime: this.lastLiveTickTs
+        ? new Date(this.lastLiveTickTs).toISOString()
+        : undefined,
+      marketLive:
+        this.maxTickAgeMs <= 0 ||
+        (this.lastLiveTickTs > 0 && Date.now() - this.lastLiveTickTs <= this.maxTickAgeMs),
     };
   }
 }
