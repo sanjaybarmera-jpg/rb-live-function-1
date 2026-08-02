@@ -1,7 +1,7 @@
 import { logger } from "../utils/logger.js";
 import type { MarketDataProvider, Instrument } from "../providers/types.js";
 import type { Tick } from "../models/Tick.js";
-import { normalizeTick, stampTick, validateTick } from "./pipeline.js";
+import { isStaleTick, normalizeTick, stampTick, validateTick } from "./pipeline.js";
 import { BoundedQueue } from "./queue.js";
 import { CandleAggregator } from "./candles/CandleAggregator.js";
 import { parseTimeframes } from "./candles/timeframes.js";
@@ -14,6 +14,8 @@ export interface MarketEngineOptions {
   instruments: Instrument[];
   enabledTimeframes: string;
   historyThrottleMs: number;
+  /** Ignore ticks whose exchange timestamp is older than this (ms). 0 disables. */
+  maxTickAgeMs?: number;
 }
 
 export class MarketEngine {
