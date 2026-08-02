@@ -25,6 +25,7 @@ export class MarketEngine {
   private started = Date.now();
   private tickCounter = 0;
   private tickReportTimer: NodeJS.Timeout | null = null;
+  private candleFlushTimer: NodeJS.Timeout | null = null;
   private draining = false;
   private stopping = false;
 
@@ -33,12 +34,13 @@ export class MarketEngine {
     this.history = new RatesHistoryWriter(opts.historyThrottleMs);
 
     opts.provider.onTick((t) => this.onTick(t));
-    this.aggregator.onCandle(({ candle }) => {
-      this.candles.write(candle).catch(() => {
+    this.aggregator.onCandle(({ candle, closed }) => {
+      this.candles.write(candle, closed).catch(() => {
         /* logged in writer */
       });
     });
   }
+
 
   async start(): Promise<void> {
     logger.info({ provider: this.opts.provider.name }, "[engine] starting");
@@ -52,16 +54,21 @@ export class MarketEngine {
       );
       this.tickCounter = 0;
     }, 60_000);
+    // Keep the currently-open candles persisted so market_candles is never
+    // empty while the market is open (writer throttles duplicate writes).
+    this.candleFlushTimer = setInterval(() => this.aggregator.flushOpen(), 5_000);
     this.drain();
   }
 
   async stop(): Promise<void> {
     this.stopping = true;
     if (this.tickReportTimer) clearInterval(this.tickReportTimer);
+    if (this.candleFlushTimer) clearInterval(this.candleFlushTimer);
     await this.opts.provider.disconnect();
     await this.rates.stop();
     logger.info("[engine] stopped");
   }
+
 
   private onTick(raw: Tick): void {
     if (!validateTick(raw)) return;
