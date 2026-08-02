@@ -2,29 +2,33 @@ import { logger } from "../utils/logger.js";
 import { toIso } from "../utils/time.js";
 import { getSupabase } from "./supabase.js";
 import type { Candle } from "../models/Candle.js";
+import { metalGroupForSymbol } from "./metals.js";
 
-/** UPSERTs candles into public.market_candles keyed by (symbol, timeframe, bucket_start). */
+/** UPSERTs candles into public.market_candles keyed by (metal_type, timeframe, candle_time). */
 export class CandleWriter {
   private lastError: string | null = null;
 
-  async write(candle: Candle): Promise<void> {
+  async write(candle: Candle, provider = "angelone"): Promise<void> {
+    const metalType = metalGroupForSymbol(candle.symbol);
+    if (!metalType) return;
+
     const row = {
-      symbol: candle.symbol,
+      metal_type: metalType,
       timeframe: candle.timeframe,
-      bucket_start: toIso(candle.bucketStart),
+      candle_time: toIso(candle.bucketStart),
       open: candle.open,
       high: candle.high,
       low: candle.low,
       close: candle.close,
-      volume: candle.volume,
+      provider,
     };
     const { error } = await getSupabase()
       .from("market_candles")
-      .upsert(row, { onConflict: "symbol,timeframe,bucket_start" });
+      .upsert(row, { onConflict: "metal_type,timeframe,candle_time" });
     if (error) {
       this.lastError = error.message;
       logger.error(
-        { err: error.message, symbol: candle.symbol, tf: candle.timeframe },
+        { err: error.message, metal: metalType, tf: candle.timeframe },
         "[market_candles] upsert failed",
       );
       throw error;

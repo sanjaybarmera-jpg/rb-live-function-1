@@ -2,24 +2,29 @@ import { logger } from "../utils/logger.js";
 import { toIso } from "../utils/time.js";
 import { getSupabase } from "./supabase.js";
 import type { Tick } from "../models/Tick.js";
+import {
+  metalGroupForSymbol,
+  metalTypesForGroup,
+  type MetalGroup,
+} from "./metals.js";
 
-interface RateRow {
-  symbol: string;
-  ltp: number;
-  bid: number | null;
-  ask: number | null;
-  ts: string;
+interface MetalState {
+  group: MetalGroup;
+  mcx_ltp: number;
+  high: number;
+  low: number;
+  updated_at: string;
 }
 
 const FLUSH_INTERVAL_MS = 250;
 
 /**
- * Buffers the latest tick per symbol in memory and flushes them to
- * public.rates via UPSERT on a fixed interval. Duplicate ticks for the same
- * symbol within a flush window collapse into a single row.
+ * Buffers the latest tick per metal group in memory and flushes them to
+ * public.rates on a fixed interval. Each flush updates only mcx_ltp, high,
+ * low and updated_at for the rows matching the group's metal_type values.
  */
 export class RatesWriter {
-  private buffer = new Map<string, RateRow>();
+  private buffer = new Map<MetalGroup, MetalState>();
   private timer: NodeJS.Timeout | null = null;
   private flushing = false;
   private lastError: string | null = null;
@@ -43,32 +48,44 @@ export class RatesWriter {
     logger.info("[rates] buffered writer stopped");
   }
 
-  /** Non-blocking: records the latest tick for the symbol. */
+  /** Non-blocking: records the latest tick for the tick's metal group. */
   write(tick: Tick): void {
-    this.buffer.set(tick.symbol, {
-      symbol: tick.symbol,
-      ltp: tick.ltp,
-      bid: tick.bid ?? null,
-      ask: tick.ask ?? null,
-      ts: toIso(tick.exchangeTs ?? tick.receivedTs),
+    const group = metalGroupForSymbol(tick.symbol);
+    if (!group) return;
+    const ts = toIso(tick.exchangeTs ?? tick.receivedTs);
+    const prev = this.buffer.get(group);
+    this.buffer.set(group, {
+      group,
+      mcx_ltp: tick.ltp,
+      high: prev ? Math.max(prev.high, tick.ltp) : tick.ltp,
+      low: prev ? Math.min(prev.low, tick.ltp) : tick.ltp,
+      updated_at: ts,
     });
   }
 
   async flush(): Promise<void> {
     if (this.flushing || this.buffer.size === 0) return;
     this.flushing = true;
-    const rows = Array.from(this.buffer.values());
+    const states = Array.from(this.buffer.values());
     this.buffer.clear();
     try {
-      const { error } = await getSupabase()
-        .from("rates")
-        .upsert(rows, { onConflict: "symbol" });
-      if (error) {
-        this.lastError = error.message;
-        logger.error({ err: error.message, count: rows.length }, "[rates] upsert failed");
-        return;
+      for (const state of states) {
+        const { error } = await getSupabase()
+          .from("rates")
+          .update({
+            mcx_ltp: state.mcx_ltp,
+            high: state.high,
+            low: state.low,
+            updated_at: state.updated_at,
+          })
+          .in("metal_type", metalTypesForGroup(state.group) as string[]);
+        if (error) {
+          this.lastError = error.message;
+          logger.error({ err: error.message, group: state.group }, "[rates] update failed");
+          continue;
+        }
+        this.lastError = null;
       }
-      this.lastError = null;
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       logger.error({ err: this.lastError }, "[rates] flush failed");
