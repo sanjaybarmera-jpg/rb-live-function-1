@@ -30,6 +30,13 @@ export class MarketEngine {
   private candleFlushTimer: NodeJS.Timeout | null = null;
   private draining = false;
   private stopping = false;
+  private staleTickCount = 0;
+  private lastStaleLogAt = 0;
+  private lastLiveTickTs = 0;
+
+  private get maxTickAgeMs(): number {
+    return this.opts.maxTickAgeMs ?? 120_000;
+  }
 
   constructor(private opts: MarketEngineOptions) {
     this.aggregator = new CandleAggregator(parseTimeframes(opts.enabledTimeframes));
@@ -58,7 +65,11 @@ export class MarketEngine {
     }, 60_000);
     // Keep the currently-open candles persisted so market_candles is never
     // empty while the market is open (writer throttles duplicate writes).
-    this.candleFlushTimer = setInterval(() => this.aggregator.flushOpen(), 5_000);
+    this.candleFlushTimer = setInterval(() => {
+      // Only keep persisting open candles while live ticks are still arriving.
+      if (this.maxTickAgeMs > 0 && Date.now() - this.lastLiveTickTs > this.maxTickAgeMs) return;
+      this.aggregator.flushOpen();
+    }, 5_000);
     this.drain();
   }
 
@@ -75,6 +86,30 @@ export class MarketEngine {
   private onTick(raw: Tick): void {
     if (!validateTick(raw)) return;
     const tick = stampTick(normalizeTick(raw));
+
+    // Market closed / replayed snapshot: the feed re-sends the last trade of the
+    // previous session. Never open or update a candle from it — wait for the
+    // first genuinely live tick.
+    if (isStaleTick(tick, this.maxTickAgeMs)) {
+      this.staleTickCount++;
+      const now = Date.now();
+      if (now - this.lastStaleLogAt > 60_000) {
+        this.lastStaleLogAt = now;
+        logger.info(
+          {
+            symbol: tick.symbol,
+            exchangeTs: tick.exchangeTs,
+            ageSec: tick.exchangeTs ? Math.floor((now - tick.exchangeTs) / 1000) : undefined,
+            maxTickAgeMs: this.maxTickAgeMs,
+            staleTickCount: this.staleTickCount,
+          },
+          "[engine] stale tick ignored (market likely closed) — waiting for live tick",
+        );
+      }
+      return;
+    }
+
+    this.lastLiveTickTs = Date.now();
     this.tickCounter++;
     this.queue.push(tick);
     if (!this.draining) this.drain();
