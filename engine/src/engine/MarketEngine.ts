@@ -53,6 +53,7 @@ export class MarketEngine {
 
   async start(): Promise<void> {
     logger.info({ provider: this.opts.provider.name }, "[engine] starting");
+    await this.rates.init();
     this.rates.start();
     await this.opts.provider.connect();
     await this.opts.provider.subscribe(this.opts.instruments);
