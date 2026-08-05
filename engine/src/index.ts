@@ -31,14 +31,24 @@ async function main(): Promise<void> {
 
   await engine.start();
 
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info({ signal }, "[boot] shutdown signal received");
+    // Hard-exit guard so the container never hangs past the platform's grace period.
+    const force = setTimeout(() => {
+      logger.warn("[boot] graceful shutdown timed out — forcing exit");
+      process.exit(1);
+    }, 10_000);
+    force.unref();
     try {
       await engine.stop();
       await health.stop();
     } catch (err) {
       logger.error({ err }, "[boot] error during shutdown");
     } finally {
+      clearTimeout(force);
       process.exit(0);
     }
   };
@@ -48,9 +58,12 @@ async function main(): Promise<void> {
   process.on("unhandledRejection", (reason) =>
     logger.error({ reason }, "[boot] unhandled rejection"),
   );
-  process.on("uncaughtException", (err) =>
-    logger.error({ err }, "[boot] uncaught exception"),
-  );
+  process.on("uncaughtException", (err) => {
+    logger.error({ err }, "[boot] uncaught exception");
+    // Exit non-zero so Railway's restart policy replaces the unhealthy process.
+    void shutdown("uncaughtException").then(() => process.exit(1));
+  });
+
 }
 
 main().catch((err) => {

@@ -11,6 +11,7 @@ RUN npm run build && npm prune --production
 FROM node:20-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+ENV PORT=8080
 RUN addgroup -S app && adduser -S app -G app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
@@ -18,5 +19,6 @@ COPY --from=build /app/package.json ./package.json
 USER app
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD wget -qO- http://localhost:8080/health || exit 1
+  CMD wget -qO- "http://127.0.0.1:${PORT:-8080}/health" || exit 1
 CMD ["node", "dist/index.js"]
+

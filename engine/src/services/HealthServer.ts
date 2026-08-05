@@ -24,7 +24,8 @@ export class HealthServer {
 
   start(): void {
     this.server = http.createServer((req, res) => {
-      if (req.method === "GET" && req.url === "/health") {
+      const path = (req.url ?? "/").split("?")[0];
+      if (req.method === "GET" && (path === "/health" || path === "/healthz" || path === "/")) {
         const snap = this.snapshot();
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(snap, null, 2));
@@ -33,10 +34,12 @@ export class HealthServer {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
     });
-    this.server.listen(this.port, () => {
+    // 0.0.0.0 is required so Railway's proxy/healthcheck can reach the process.
+    this.server.listen(this.port, "0.0.0.0", () => {
       logger.info({ port: this.port }, "[health] server listening");
     });
   }
+
 
   async stop(): Promise<void> {
     if (!this.server) return;
