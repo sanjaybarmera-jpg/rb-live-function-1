@@ -1,5 +1,16 @@
-import "dotenv/config";
 import { z } from "zod";
+
+// Production (Railway/Docker) injects configuration purely through environment
+// variables. A local .env file is a developer convenience only and is never
+// required — it is loaded best-effort outside production.
+if (process.env["NODE_ENV"] !== "production") {
+  try {
+    const { config } = await import("dotenv");
+    config();
+  } catch {
+    /* dotenv not installed / no .env file — env vars only */
+  }
+}
 
 const schema = z.object({
   SUPABASE_URL: z.string().url(),
