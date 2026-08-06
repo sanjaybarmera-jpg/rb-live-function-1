@@ -72,5 +72,5 @@ export async function loginAngelOne(creds: AngelCredentials): Promise<AngelSessi
   };
 
   logger.info("[angelone] login ok, tokens acquired");
-  return { jwtToken, refreshToken, feedToken };
+  return { jwtToken, refreshToken, feedToken, issuedAt: Date.now() };
 }
