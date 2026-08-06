@@ -1,20 +1,64 @@
 import { loadEnv } from "./config/env.js";
 import { logger } from "./utils/logger.js";
 import { createProvider } from "./providers/registry.js";
-import { loadConfiguredInstruments } from "./providers/angelone/instruments.js";
+import {
+  discoverInstruments,
+  loadConfiguredInstruments,
+} from "./providers/angelone/instruments.js";
+import { setDiscoveryState } from "./services/discoveryState.js";
 import { MarketEngine } from "./engine/MarketEngine.js";
 import { HealthServer } from "./services/HealthServer.js";
+import type { Instrument } from "./providers/types.js";
+
+/**
+ * Resolve the subscription list. Discovery is opt-in (INSTRUMENT_DISCOVERY=auto)
+ * and always degrades to the existing env configuration on failure.
+ */
+async function resolveInstruments(mode: "env" | "auto"): Promise<Instrument[]> {
+  logger.info({ mode }, `[boot] discovery mode: ${mode.toUpperCase()}`);
+  if (mode !== "auto") {
+    setDiscoveryState({
+      mode: "env",
+      source: "env",
+      timestamp: new Date().toISOString(),
+    });
+    return loadConfiguredInstruments();
+  }
+
+  try {
+    const result = await discoverInstruments();
+    setDiscoveryState({
+      mode: "auto",
+      source: "scripmaster",
+      timestamp: result.discoveredAt,
+      goldToken: result.contracts.find((c) => c.group === "gold")?.token,
+      silverToken: result.contracts.find((c) => c.group === "silver")?.token,
+      cacheAgeMs: result.cacheAgeMs,
+    });
+    return result.instruments;
+  } catch (err) {
+    logger.error({ err }, "[boot] discovery failed");
+    logger.warn("[boot] using ENV fallback (ANGEL_INSTRUMENTS / METAL_TOKEN_MAP)");
+    setDiscoveryState({
+      mode: "auto",
+      source: "env-fallback",
+      timestamp: new Date().toISOString(),
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return loadConfiguredInstruments();
+  }
+}
 
 async function main(): Promise<void> {
   const env = loadEnv();
   logger.info({ env: env.NODE_ENV }, "[boot] rb-live-engine starting");
 
   const provider = createProvider("angelone");
-  const instruments = loadConfiguredInstruments();
+  const instruments = await resolveInstruments(env.INSTRUMENT_DISCOVERY);
 
   if (instruments.length === 0) {
     logger.warn(
-      "[boot] ANGEL_INSTRUMENTS is empty — engine will connect but receive no ticks",
+      "[boot] no instruments resolved — engine will connect but receive no ticks",
     );
   }
 
