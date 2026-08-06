@@ -1,4 +1,5 @@
 import { logger } from "../../utils/logger.js";
+import { retry } from "../../utils/retry.js";
 import type {
   Instrument,
   MarketDataProvider,
@@ -6,7 +7,12 @@ import type {
   StatusHandler,
   TickHandler,
 } from "../types.js";
-import { loginAngelOne, type AngelCredentials, type AngelSession } from "./auth.js";
+import {
+  loginAngelOne,
+  isSessionFresh,
+  type AngelCredentials,
+  type AngelSession,
+} from "./auth.js";
 import { AngelOneWebSocket } from "./websocket.js";
 import { exchangeName } from "./instruments.js";
 
@@ -27,17 +33,63 @@ export class AngelOneProvider implements MarketDataProvider {
     reconnectCount: 0,
   };
   private instruments: Instrument[] = [];
+  /** Single-flight guard: concurrent reconnects share one login promise. */
+  private authInFlight: Promise<AngelSession> | null = null;
 
   constructor(private opts: AngelOneProviderOptions) {}
 
+  /**
+   * Returns a valid session, logging in only when the current one is missing
+   * or older than the token max age. Concurrent callers share one attempt.
+   */
+  private async ensureFreshSession(force = false): Promise<AngelSession> {
+    if (!force && isSessionFresh(this.session)) {
+      logger.debug(
+        { tokenAgeMs: Date.now() - this.session!.issuedAt },
+        "[angelone.auth] token still valid — skipping refresh",
+      );
+      return this.session!;
+    }
+    if (this.authInFlight) {
+      logger.debug("[angelone.auth] refresh already in flight — awaiting it");
+      return this.authInFlight;
+    }
+
+    logger.info(
+      { reason: this.session ? "expired" : "initial" },
+      "[angelone.auth] token refresh started",
+    );
+    this.authInFlight = retry(
+      () =>
+        loginAngelOne({
+          apiKey: this.opts.apiKey,
+          clientCode: this.opts.clientCode,
+          pin: this.opts.pin,
+          totpSecret: this.opts.totpSecret,
+        }),
+      5,
+      { baseMs: 2000, capMs: 60_000 },
+    );
+
+    try {
+      const session = await this.authInFlight;
+      this.session = session;
+      logger.info(
+        { issuedAt: new Date(session.issuedAt).toISOString() },
+        "[angelone.auth] token refresh success",
+      );
+      return session;
+    } catch (err) {
+      logger.error({ err }, "[angelone.auth] token refresh failed");
+      throw err;
+    } finally {
+      this.authInFlight = null;
+    }
+  }
+
   async connect(): Promise<void> {
     logger.info("[angelone] logging in");
-    this.session = await loginAngelOne({
-      apiKey: this.opts.apiKey,
-      clientCode: this.opts.clientCode,
-      pin: this.opts.pin,
-      totpSecret: this.opts.totpSecret,
-    });
+    this.session = await this.ensureFreshSession(true);
 
     this.ws = new AngelOneWebSocket(
       {
@@ -58,6 +110,10 @@ export class AngelOneProvider implements MarketDataProvider {
           this.emitStatus();
         },
         onError: (err) => logger.error({ err: err.message }, "[angelone] ws error"),
+        onNeedAuth: async () => {
+          const session = await this.ensureFreshSession();
+          return { jwtToken: session.jwtToken, feedToken: session.feedToken };
+        },
         onTick: (dt) => {
           const symbol = dt.token;
           const exchange = exchangeName(dt.exchangeType);

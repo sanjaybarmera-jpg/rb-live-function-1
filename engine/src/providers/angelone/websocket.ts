@@ -20,6 +20,11 @@ export type AngelWsEvents = {
   onOpen: () => void;
   onClose: (code: number, reason: string) => void;
   onError: (err: Error) => void;
+  /**
+   * Optional auth refresh hook invoked before every reconnect attempt.
+   * Must resolve with the (possibly unchanged) credentials to use.
+   */
+  onNeedAuth?: () => Promise<Partial<AngelWsConfig>>;
 };
 
 export class AngelOneWebSocket {
@@ -28,6 +33,7 @@ export class AngelOneWebSocket {
   private closed = false;
   private reconnectAttempt = 0;
   private instruments: Instrument[] = [];
+  private recovering = false;
   public reconnectCount = 0;
 
   constructor(
@@ -59,6 +65,13 @@ export class AngelOneWebSocket {
 
       ws.on("open", () => {
         logger.info("[angelone.ws] connected");
+        if (this.recovering) {
+          this.recovering = false;
+          logger.info(
+            { reconnectCount: this.reconnectCount },
+            "[angelone.auth] websocket recovered after reconnect",
+          );
+        }
         this.reconnectAttempt = 0;
         this.startHeartbeat();
         if (this.instruments.length > 0) {
@@ -121,8 +134,16 @@ export class AngelOneWebSocket {
     if (this.closed) return;
     this.reconnectCount++;
     try {
+      // Refresh credentials (single-flighted by the provider) before reopening,
+      // so an expired jwt/feed token never causes a permanent 401 loop.
+      if (this.events.onNeedAuth) {
+        const fresh = await this.events.onNeedAuth();
+        if (fresh) this.updateTokens(fresh);
+      }
+      this.recovering = true;
       await this.open();
     } catch (err) {
+      this.recovering = false;
       logger.error({ err }, "[angelone.ws] reconnect attempt failed");
       void this.scheduleReconnect();
     }
