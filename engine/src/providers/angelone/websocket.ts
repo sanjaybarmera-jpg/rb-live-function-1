@@ -20,6 +20,11 @@ export type AngelWsEvents = {
   onOpen: () => void;
   onClose: (code: number, reason: string) => void;
   onError: (err: Error) => void;
+  /**
+   * Optional auth refresh hook invoked before every reconnect attempt.
+   * Must resolve with the (possibly unchanged) credentials to use.
+   */
+  onNeedAuth?: () => Promise<Partial<AngelWsConfig>>;
 };
 
 export class AngelOneWebSocket {
