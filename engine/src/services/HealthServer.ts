@@ -1,5 +1,7 @@
 import http from "node:http";
 import { logger } from "../utils/logger.js";
+import { getDiscoveryState } from "./discoveryState.js";
+import { scripMasterCacheAgeMs } from "../providers/angelone/scripMaster.js";
 
 export interface HealthSnapshot {
   connected: boolean;
@@ -27,8 +29,13 @@ export class HealthServer {
       const path = (req.url ?? "/").split("?")[0];
       if (req.method === "GET" && (path === "/health" || path === "/healthz" || path === "/")) {
         const snap = this.snapshot();
+        // Additive, read-only discovery info — existing fields are untouched.
+        const body = {
+          ...snap,
+          discovery: { ...getDiscoveryState(), scripMasterCacheAgeMs: scripMasterCacheAgeMs() },
+        };
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(snap, null, 2));
+        res.end(JSON.stringify(body, null, 2));
         return;
       }
       res.writeHead(404, { "Content-Type": "text/plain" });
