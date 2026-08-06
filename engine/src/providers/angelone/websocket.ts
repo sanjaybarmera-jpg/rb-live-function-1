@@ -126,8 +126,16 @@ export class AngelOneWebSocket {
     if (this.closed) return;
     this.reconnectCount++;
     try {
+      // Refresh credentials (single-flighted by the provider) before reopening,
+      // so an expired jwt/feed token never causes a permanent 401 loop.
+      if (this.events.onNeedAuth) {
+        const fresh = await this.events.onNeedAuth();
+        if (fresh) this.updateTokens(fresh);
+      }
+      this.recovering = true;
       await this.open();
     } catch (err) {
+      this.recovering = false;
       logger.error({ err }, "[angelone.ws] reconnect attempt failed");
       void this.scheduleReconnect();
     }
