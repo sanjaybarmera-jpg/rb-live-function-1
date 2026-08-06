@@ -1,4 +1,5 @@
 import { logger } from "../../utils/logger.js";
+import { retry } from "../../utils/retry.js";
 import type {
   Instrument,
   MarketDataProvider,
@@ -6,7 +7,12 @@ import type {
   StatusHandler,
   TickHandler,
 } from "../types.js";
-import { loginAngelOne, type AngelCredentials, type AngelSession } from "./auth.js";
+import {
+  loginAngelOne,
+  isSessionFresh,
+  type AngelCredentials,
+  type AngelSession,
+} from "./auth.js";
 import { AngelOneWebSocket } from "./websocket.js";
 import { exchangeName } from "./instruments.js";
 
