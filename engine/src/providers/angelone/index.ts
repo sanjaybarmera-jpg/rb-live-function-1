@@ -110,6 +110,10 @@ export class AngelOneProvider implements MarketDataProvider {
           this.emitStatus();
         },
         onError: (err) => logger.error({ err: err.message }, "[angelone] ws error"),
+        onNeedAuth: async () => {
+          const session = await this.ensureFreshSession();
+          return { jwtToken: session.jwtToken, feedToken: session.feedToken };
+        },
         onTick: (dt) => {
           const symbol = dt.token;
           const exchange = exchangeName(dt.exchangeType);
