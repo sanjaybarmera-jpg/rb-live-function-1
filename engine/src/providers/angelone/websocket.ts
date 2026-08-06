@@ -33,6 +33,7 @@ export class AngelOneWebSocket {
   private closed = false;
   private reconnectAttempt = 0;
   private instruments: Instrument[] = [];
+  private recovering = false;
   public reconnectCount = 0;
 
   constructor(
