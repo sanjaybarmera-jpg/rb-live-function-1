@@ -21,7 +21,8 @@ export const SILVER_METAL_TYPES = [
 /**
  * Angel One streams numeric instrument tokens, not readable contract names,
  * so a token -> metal group map is required. Configure via METAL_TOKEN_MAP
- * (e.g. "466583:gold,471725:silver").
+ * (e.g. "466583:gold,471725:silver"). Auto-discovered contracts register
+ * themselves at runtime via setTokenGroup(), which overrides the env seed.
  */
 function loadTokenMap(): Map<string, MetalGroup> {
   const raw = process.env["METAL_TOKEN_MAP"] ?? "";
@@ -36,10 +37,33 @@ function loadTokenMap(): Map<string, MetalGroup> {
 }
 
 let tokenMap: Map<string, MetalGroup> | null = null;
+/** Runtime registrations take precedence over the env seed. */
+const runtimeMap = new Map<string, MetalGroup>();
+
+function ensureSeed(): Map<string, MetalGroup> {
+  if (!tokenMap) tokenMap = loadTokenMap();
+  return tokenMap;
+}
+
+/** Register (or override) a token -> metal group mapping at runtime. */
+export function setTokenGroup(token: string, group: MetalGroup): void {
+  runtimeMap.set(String(token).trim(), group);
+}
+
+/** Current effective mapping (env seed merged with runtime overrides). */
+export function getTokenGroups(): Record<string, MetalGroup> {
+  const merged: Record<string, MetalGroup> = {};
+  for (const [k, v] of ensureSeed()) merged[k] = v;
+  for (const [k, v] of runtimeMap) merged[k] = v;
+  return merged;
+}
 
 export function metalGroupForSymbol(symbol: string): MetalGroup | null {
-  if (!tokenMap) tokenMap = loadTokenMap();
-  const direct = tokenMap.get(symbol.trim());
+  const key = symbol.trim();
+  const runtime = runtimeMap.get(key);
+  if (runtime) return runtime;
+
+  const direct = ensureSeed().get(key);
   if (direct) return direct;
 
   const s = symbol.toUpperCase();
