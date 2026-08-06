@@ -64,6 +64,13 @@ export class AngelOneWebSocket {
 
       ws.on("open", () => {
         logger.info("[angelone.ws] connected");
+        if (this.recovering) {
+          this.recovering = false;
+          logger.info(
+            { reconnectCount: this.reconnectCount },
+            "[angelone.auth] websocket recovered after reconnect",
+          );
+        }
         this.reconnectAttempt = 0;
         this.startHeartbeat();
         if (this.instruments.length > 0) {
