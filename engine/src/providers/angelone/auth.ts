@@ -16,6 +16,23 @@ export interface AngelSession {
   jwtToken: string;
   refreshToken: string;
   feedToken: string;
+  /** Wall-clock ms when these tokens were issued by Angel One. */
+  issuedAt: number;
+}
+
+/**
+ * Angel One session tokens are valid for roughly 24h. We treat anything older
+ * than 8h as "needs refresh" so a reconnect never races the hard expiry.
+ */
+export const TOKEN_MAX_AGE_MS = 8 * 60 * 60 * 1000;
+
+/** True when the session is present and young enough to reuse as-is. */
+export function isSessionFresh(
+  session: AngelSession | null,
+  maxAgeMs: number = TOKEN_MAX_AGE_MS,
+): boolean {
+  if (!session) return false;
+  return Date.now() - session.issuedAt < maxAgeMs;
 }
 
 export async function loginAngelOne(creds: AngelCredentials): Promise<AngelSession> {
