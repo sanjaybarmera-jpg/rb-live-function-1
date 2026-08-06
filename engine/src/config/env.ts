@@ -23,6 +23,15 @@ const schema = z.object({
   ANGEL_INSTRUMENTS: z.string().default(""),
   ANGEL_SUBSCRIPTION_MODE: z.coerce.number().int().min(1).max(3).default(2),
 
+  /** "env" (default, existing behaviour) or "auto" (ScripMaster discovery). */
+  INSTRUMENT_DISCOVERY: z.enum(["env", "auto"]).default("env"),
+  /** ScripMaster cache lifetime in ms. Default 6h. */
+  SCRIPMASTER_CACHE_TTL: z.coerce.number().int().positive().default(6 * 60 * 60 * 1000),
+  /** Skip contracts expiring within this many days. Default 2. */
+  ROLLOVER_DAYS_BEFORE_EXPIRY: z.coerce.number().int().nonnegative().default(2),
+  MCX_GOLD_SYMBOL_PREFIX: z.string().default("GOLD"),
+  MCX_SILVER_SYMBOL_PREFIX: z.string().default("SILVER"),
+
   ENABLED_TIMEFRAMES: z.string().default("1m"),
   HISTORY_THROTTLE_MS: z.coerce.number().int().nonnegative().default(1000),
   /** Drop ticks whose exchange timestamp is older than this (ms). 0 disables the guard. */
