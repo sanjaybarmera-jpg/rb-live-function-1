@@ -50,6 +50,15 @@ export function setTokenGroup(token: string, group: MetalGroup): void {
   runtimeMap.set(String(token).trim(), group);
 }
 
+/**
+ * Drop a runtime token mapping (used when a contract is rolled over).
+ * The env seed is never touched, so ENV fallback keeps working.
+ */
+export function removeTokenGroup(token: string): void {
+  runtimeMap.delete(String(token).trim());
+}
+
+
 /** Current effective mapping (env seed merged with runtime overrides). */
 export function getTokenGroups(): Record<string, MetalGroup> {
   const merged: Record<string, MetalGroup> = {};

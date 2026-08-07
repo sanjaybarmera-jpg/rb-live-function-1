@@ -147,6 +147,26 @@ export class AngelOneProvider implements MarketDataProvider {
     await this.ws.subscribe(instruments);
   }
 
+  /** Active subscription list (source of truth for rollover comparisons). */
+  getSubscribed(): Instrument[] {
+    return this.ws ? this.ws.getInstruments() : [...this.instruments];
+  }
+
+  /** Additive subscribe used by the rollover service. Never disconnects. */
+  async subscribeInstruments(add: Instrument[]): Promise<void> {
+    if (!this.ws) throw new Error("Provider not connected");
+    await this.ws.subscribeInstruments(add);
+    this.instruments = this.ws.getInstruments();
+  }
+
+  /** Targeted unsubscribe used by the rollover service. Never disconnects. */
+  async unsubscribeInstruments(remove: Instrument[]): Promise<void> {
+    if (!this.ws) throw new Error("Provider not connected");
+    await this.ws.unsubscribeInstruments(remove);
+    this.instruments = this.ws.getInstruments();
+  }
+
+
   async disconnect(): Promise<void> {
     if (this.ws) await this.ws.disconnect();
     this.status.connected = false;

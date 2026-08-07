@@ -32,6 +32,19 @@ const schema = z.object({
   MCX_GOLD_SYMBOL_PREFIX: z.string().default("GOLD"),
   MCX_SILVER_SYMBOL_PREFIX: z.string().default("SILVER"),
 
+  /** Automatic contract rollover (only active when discovery mode is "auto"). */
+  ROLLOVER_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  /** Rollover check interval in ms. Default 6h. */
+  ROLLOVER_CHECK_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(6 * 60 * 60 * 1000),
+
+
   ENABLED_TIMEFRAMES: z.string().default("1m"),
   HISTORY_THROTTLE_MS: z.coerce.number().int().nonnegative().default(1000),
   /** Drop ticks whose exchange timestamp is older than this (ms). 0 disables the guard. */

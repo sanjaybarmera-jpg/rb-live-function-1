@@ -27,6 +27,21 @@ export type AngelWsEvents = {
   onNeedAuth?: () => Promise<Partial<AngelWsConfig>>;
 };
 
+const key = (i: Instrument): string => `${i.exchangeType}:${i.token}`;
+
+function dedupe(list: Instrument[]): Instrument[] {
+  const seen = new Set<string>();
+  const out: Instrument[] = [];
+  for (const i of list) {
+    if (seen.has(key(i))) continue;
+    seen.add(key(i));
+    out.push(i);
+  }
+  return out;
+}
+
+
+
 export class AngelOneWebSocket {
   private ws: WebSocket | null = null;
   private hbTimer: NodeJS.Timeout | null = null;
@@ -150,13 +165,48 @@ export class AngelOneWebSocket {
   }
 
   async subscribe(instruments: Instrument[]): Promise<void> {
-    this.instruments = instruments;
+    this.instruments = dedupe(instruments);
     if (this.ws?.readyState === WebSocket.OPEN) {
-      await this.sendSubscribe(instruments);
+      await this.sendSubscribe(this.instruments);
+    }
+  }
+
+  /** Currently tracked subscription list (survives reconnects). */
+  getInstruments(): Instrument[] {
+    return [...this.instruments];
+  }
+
+  /**
+   * Additive subscribe — sends a subscribe frame for `add` only and merges it
+   * into the tracked list. Idempotent: already-tracked instruments are skipped.
+   */
+  async subscribeInstruments(add: Instrument[]): Promise<void> {
+    const known = new Set(this.instruments.map(key));
+    const fresh = dedupe(add).filter((i) => !known.has(key(i)));
+    if (fresh.length === 0) return;
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      throw new Error("websocket not open — cannot subscribe");
+    }
+    await this.sendSubscribe(fresh);
+    this.instruments = [...this.instruments, ...fresh];
+  }
+
+  /** Removes `remove` from the tracked list and sends an unsubscribe frame. */
+  async unsubscribeInstruments(remove: Instrument[]): Promise<void> {
+    const drop = new Set(dedupe(remove).map(key));
+    const present = this.instruments.filter((i) => drop.has(key(i)));
+    if (present.length === 0) return;
+    this.instruments = this.instruments.filter((i) => !drop.has(key(i)));
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      await this.sendAction(present, 0);
     }
   }
 
   private async sendSubscribe(instruments: Instrument[]): Promise<void> {
+    await this.sendAction(instruments, 1);
+  }
+
+  private async sendAction(instruments: Instrument[], action: 0 | 1): Promise<void> {
     // Group by exchangeType
     const grouped = new Map<number, string[]>();
     for (const i of instruments) {
@@ -171,15 +221,19 @@ export class AngelOneWebSocket {
 
     const payload = {
       correlationID: `rb-${Date.now()}`,
-      action: 1, // 1 = subscribe, 0 = unsubscribe
+      action, // 1 = subscribe, 0 = unsubscribe
       params: {
         mode: this.cfg.subscriptionMode,
         tokenList,
       },
     };
     this.ws?.send(JSON.stringify(payload));
-    logger.info({ tokenList, mode: this.cfg.subscriptionMode }, "[angelone.ws] subscribe sent");
+    logger.info(
+      { tokenList, mode: this.cfg.subscriptionMode, action },
+      `[angelone.ws] ${action === 1 ? "subscribe" : "unsubscribe"} sent`,
+    );
   }
+
 
   async disconnect(): Promise<void> {
     this.closed = true;
