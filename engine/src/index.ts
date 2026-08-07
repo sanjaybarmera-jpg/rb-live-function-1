@@ -123,8 +123,10 @@ async function main(): Promise<void> {
     }, 10_000);
     force.unref();
     try {
+      rollover?.stop();
       await engine.stop();
       await health.stop();
+
     } catch (err) {
       logger.error({ err }, "[boot] error during shutdown");
     } finally {
