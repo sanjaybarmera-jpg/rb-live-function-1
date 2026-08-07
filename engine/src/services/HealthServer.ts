@@ -35,7 +35,9 @@ export class HealthServer {
         const body = {
           ...snap,
           discovery: { ...getDiscoveryState(), scripMasterCacheAgeMs: scripMasterCacheAgeMs() },
+          rollover: getRolloverState(),
         };
+
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(body, null, 2));
         return;
