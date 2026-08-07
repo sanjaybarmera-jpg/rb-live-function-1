@@ -67,7 +67,7 @@ async function main(): Promise<void> {
   logger.info({ env: env.NODE_ENV }, "[boot] rb-live-engine starting");
 
   const provider = createProvider("angelone");
-  const instruments = await resolveInstruments(env.INSTRUMENT_DISCOVERY);
+  const { instruments, contracts } = await resolveInstruments(env.INSTRUMENT_DISCOVERY);
 
   if (instruments.length === 0) {
     logger.warn(
@@ -87,6 +87,29 @@ async function main(): Promise<void> {
   health.start();
 
   await engine.start();
+
+  // Automatic contract rollover — only meaningful with ScripMaster discovery,
+  // and only when the provider exposes the subscription lifecycle hooks.
+  setActiveContracts(contracts);
+  const rolloverCapable = provider as unknown as Partial<RolloverCapableProvider>;
+  let rollover: RolloverService | null = null;
+  if (
+    env.INSTRUMENT_DISCOVERY === "auto" &&
+    typeof rolloverCapable.subscribeInstruments === "function" &&
+    typeof rolloverCapable.unsubscribeInstruments === "function" &&
+    typeof rolloverCapable.getSubscribed === "function"
+  ) {
+    rollover = new RolloverService({
+      provider: rolloverCapable as RolloverCapableProvider,
+      enabled: env.ROLLOVER_ENABLED,
+      intervalMs: env.ROLLOVER_CHECK_INTERVAL_MS,
+    });
+    // Boot discovery just ran, so skip the immediate duplicate check.
+    rollover.start(false);
+  } else if (env.ROLLOVER_ENABLED) {
+    logger.info("[rollover] not started — discovery mode is ENV");
+  }
+
 
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
