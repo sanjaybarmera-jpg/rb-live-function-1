@@ -6,15 +6,27 @@ import {
   loadConfiguredInstruments,
 } from "./providers/angelone/instruments.js";
 import { setDiscoveryState } from "./services/discoveryState.js";
+import {
+  RolloverService,
+  setActiveContracts,
+  toActive,
+  type ActiveContract,
+  type RolloverCapableProvider,
+} from "./services/rollover.js";
 import { MarketEngine } from "./engine/MarketEngine.js";
 import { HealthServer } from "./services/HealthServer.js";
 import type { Instrument } from "./providers/types.js";
+
+interface ResolvedInstruments {
+  instruments: Instrument[];
+  contracts: ActiveContract[];
+}
 
 /**
  * Resolve the subscription list. Discovery is opt-in (INSTRUMENT_DISCOVERY=auto)
  * and always degrades to the existing env configuration on failure.
  */
-async function resolveInstruments(mode: "env" | "auto"): Promise<Instrument[]> {
+async function resolveInstruments(mode: "env" | "auto"): Promise<ResolvedInstruments> {
   logger.info({ mode }, `[boot] discovery mode: ${mode.toUpperCase()}`);
   if (mode !== "auto") {
     setDiscoveryState({
@@ -22,7 +34,7 @@ async function resolveInstruments(mode: "env" | "auto"): Promise<Instrument[]> {
       source: "env",
       timestamp: new Date().toISOString(),
     });
-    return loadConfiguredInstruments();
+    return { instruments: loadConfiguredInstruments(), contracts: [] };
   }
 
   try {
@@ -35,7 +47,7 @@ async function resolveInstruments(mode: "env" | "auto"): Promise<Instrument[]> {
       silverToken: result.contracts.find((c) => c.group === "silver")?.token,
       cacheAgeMs: result.cacheAgeMs,
     });
-    return result.instruments;
+    return { instruments: result.instruments, contracts: result.contracts.map(toActive) };
   } catch (err) {
     logger.error({ err }, "[boot] discovery failed");
     logger.warn("[boot] using ENV fallback (ANGEL_INSTRUMENTS / METAL_TOKEN_MAP)");
@@ -45,9 +57,10 @@ async function resolveInstruments(mode: "env" | "auto"): Promise<Instrument[]> {
       timestamp: new Date().toISOString(),
       error: err instanceof Error ? err.message : String(err),
     });
-    return loadConfiguredInstruments();
+    return { instruments: loadConfiguredInstruments(), contracts: [] };
   }
 }
+
 
 async function main(): Promise<void> {
   const env = loadEnv();
