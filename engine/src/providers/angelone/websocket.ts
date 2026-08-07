@@ -27,6 +27,21 @@ export type AngelWsEvents = {
   onNeedAuth?: () => Promise<Partial<AngelWsConfig>>;
 };
 
+const key = (i: Instrument): string => `${i.exchangeType}:${i.token}`;
+
+function dedupe(list: Instrument[]): Instrument[] {
+  const seen = new Set<string>();
+  const out: Instrument[] = [];
+  for (const i of list) {
+    if (seen.has(key(i))) continue;
+    seen.add(key(i));
+    out.push(i);
+  }
+  return out;
+}
+
+
+
 export class AngelOneWebSocket {
   private ws: WebSocket | null = null;
   private hbTimer: NodeJS.Timeout | null = null;
