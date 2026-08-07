@@ -1,7 +1,9 @@
 import http from "node:http";
 import { logger } from "../utils/logger.js";
 import { getDiscoveryState } from "./discoveryState.js";
+import { getRolloverState } from "./rollover.js";
 import { scripMasterCacheAgeMs } from "../providers/angelone/scripMaster.js";
+
 
 export interface HealthSnapshot {
   connected: boolean;
