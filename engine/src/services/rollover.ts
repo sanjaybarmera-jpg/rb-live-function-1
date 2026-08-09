@@ -2,6 +2,7 @@ import { logger } from "../utils/logger.js";
 import { discoverInstruments, type DiscoveredContract } from "../providers/angelone/instruments.js";
 import { setTokenGroup, removeTokenGroup, type MetalGroup } from "./metals.js";
 import type { Instrument } from "../providers/types.js";
+import type { Tick } from "../models/Tick.js";
 
 const MCX_EXCHANGE_TYPE = 5;
 
@@ -10,6 +11,10 @@ export interface RolloverCapableProvider {
   getSubscribed(): Instrument[];
   subscribeInstruments(add: Instrument[]): Promise<void>;
   unsubscribeInstruments(remove: Instrument[]): Promise<void>;
+  /** Optional tick-confirmation capability (Phase 2.1). */
+  waitForTick?(token: string, timeoutMs: number): Promise<Tick>;
+  /** Optional market-live hint: last valid non-stale tick on any token. */
+  getLastValidTickTs?(): number | null;
 }
 
 export interface ActiveContract {
@@ -19,13 +24,20 @@ export interface ActiveContract {
   expiry: string;
 }
 
+export interface TickConfirmationState {
+  pendingToken: string | null;
+  waitingSince: string | null;
+  timeoutMs: number;
+  lastConfirmedToken: string | null;
+}
+
 export interface RolloverState {
   enabled: boolean;
   intervalMs: number;
   currentContracts: ActiveContract[];
   lastCheckTime: string | null;
   lastRolloverTime: string | null;
-  lastRolloverStatus: "none" | "success" | "failed" | "skipped";
+  lastRolloverStatus: "none" | "success" | "failed" | "skipped" | "deferred";
   lastError?: string;
   nextCheckTime: string | null;
   rolloverCount: number;
@@ -42,8 +54,20 @@ let state: RolloverState = {
   rolloverCount: 0,
 };
 
+let tickConfirmation: TickConfirmationState = {
+  pendingToken: null,
+  waitingSince: null,
+  timeoutMs: 0,
+  lastConfirmedToken: null,
+};
+
 export function getRolloverState(): RolloverState {
   return { ...state, currentContracts: [...state.currentContracts] };
+}
+
+/** Additive, read-only tick-confirmation snapshot for /health. */
+export function getTickConfirmationState(): TickConfirmationState {
+  return { ...tickConfirmation };
 }
 
 /** Seed the known-active contracts (called once at boot after discovery). */
@@ -55,7 +79,10 @@ export interface RolloverOptions {
   provider: RolloverCapableProvider;
   enabled: boolean;
   intervalMs: number;
+  /** Tick confirmation timeout in ms. 0 / omitted disables confirmation. */
+  tickConfirmTimeoutMs?: number;
 }
+
 
 export class RolloverService {
   private timer: NodeJS.Timeout | null = null;
