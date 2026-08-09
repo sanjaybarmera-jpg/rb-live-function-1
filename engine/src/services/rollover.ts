@@ -210,6 +210,29 @@ export class RolloverService {
         );
       }
 
+      // 3b. Wait for the first valid, non-stale tick on each new token before
+      //     touching the old subscriptions (Phase 2.1 tick confirmation).
+      const confirm = await this.confirmTicks(changed);
+      if (!confirm.ok) {
+        // Roll the new subscriptions back; the old contract keeps streaming.
+        try {
+          await this.opts.provider.unsubscribeInstruments(additions);
+        } catch (unsubErr) {
+          logger.warn({ err: unsubErr }, "[rollover] could not unsubscribe unconfirmed contracts");
+        }
+        for (const c of changed) removeTokenGroup(c.token);
+        for (const p of previousMappings) setTokenGroup(p.token, p.group);
+        state.lastRolloverStatus = confirm.deferred ? "deferred" : "failed";
+        state.lastError = confirm.reason;
+        logger.warn(
+          { reason: confirm.reason },
+          confirm.deferred
+            ? "[rollover] rollover deferred — retry on next scheduled check"
+            : "[rollover] rollover failed — old contract kept active",
+        );
+        return;
+      }
+
       // 4. Only now drop the old contracts.
       if (removals.length > 0) {
         logger.info({ removals }, "[rollover] unsubscribing old contracts");
@@ -234,6 +257,7 @@ export class RolloverService {
       state.lastError = err instanceof Error ? err.message : String(err);
       logger.error({ err }, "[rollover] rollover failed — previous state restored");
     }
+
   }
 }
 
