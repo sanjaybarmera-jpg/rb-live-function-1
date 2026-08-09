@@ -107,6 +107,8 @@ export class AngelOneProvider implements MarketDataProvider {
         onClose: () => {
           this.status.connected = false;
           if (this.ws) this.status.reconnectCount = this.ws.reconnectCount;
+          // Any pending tick confirmation can never complete on a dead socket.
+          this.rejectAllWaiters("websocket disconnected");
           this.emitStatus();
         },
         onError: (err) => logger.error({ err: err.message }, "[angelone] ws error"),
@@ -120,21 +122,22 @@ export class AngelOneProvider implements MarketDataProvider {
           this.status.ticksReceived++;
           this.status.lastTickTs = Date.now();
           this.status.currentContract = symbol;
-          for (const h of this.tickHandlers) {
-            h({
-              provider: this.name,
-              symbol,
-              instrumentId: `${dt.exchangeType}:${dt.token}`,
-              exchange,
-              ltp: dt.ltp,
-              bid: dt.bestBid,
-              ask: dt.bestAsk,
-              volume: dt.volume,
-              exchangeTs: dt.exchangeTs || undefined,
-              receivedTs: Date.now(),
-            });
-          }
+          const tick: Tick = {
+            provider: this.name,
+            symbol,
+            instrumentId: `${dt.exchangeType}:${dt.token}`,
+            exchange,
+            ltp: dt.ltp,
+            bid: dt.bestBid,
+            ask: dt.bestAsk,
+            volume: dt.volume,
+            exchangeTs: dt.exchangeTs || undefined,
+            receivedTs: Date.now(),
+          };
+          this.noteTick(tick);
+          for (const h of this.tickHandlers) h(tick);
         },
+
       },
     );
 
