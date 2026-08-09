@@ -27,4 +27,11 @@ export interface MarketDataProvider {
   onTick(handler: TickHandler): void;
   onStatus(handler: StatusHandler): void;
   getStatus(): ProviderStatus;
+  /**
+   * Optional: resolve with the first valid, non-stale tick for a token.
+   * Providers that do not implement it simply skip tick confirmation.
+   */
+  waitForTick?(token: string, timeoutMs: number): Promise<Tick>;
+  /** Optional: last time any token produced a valid non-stale tick. */
+  getLastValidTickTs?(): number | null;
 }
