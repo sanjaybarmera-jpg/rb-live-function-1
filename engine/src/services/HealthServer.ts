@@ -1,7 +1,7 @@
 import http from "node:http";
 import { logger } from "../utils/logger.js";
 import { getDiscoveryState } from "./discoveryState.js";
-import { getRolloverState } from "./rollover.js";
+import { getRolloverState, getTickConfirmationState } from "./rollover.js";
 import { scripMasterCacheAgeMs } from "../providers/angelone/scripMaster.js";
 
 
@@ -36,6 +36,7 @@ export class HealthServer {
           ...snap,
           discovery: { ...getDiscoveryState(), scripMasterCacheAgeMs: scripMasterCacheAgeMs() },
           rollover: getRolloverState(),
+          tickConfirmation: getTickConfirmationState(),
         };
 
         res.writeHead(200, { "Content-Type": "application/json" });

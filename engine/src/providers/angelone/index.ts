@@ -15,9 +15,18 @@ import {
 } from "./auth.js";
 import { AngelOneWebSocket } from "./websocket.js";
 import { exchangeName } from "./instruments.js";
+import type { Tick } from "../../models/Tick.js";
+import { isStaleTick } from "../../engine/pipeline.js";
+import { loadEnv } from "../../config/env.js";
 
 export interface AngelOneProviderOptions extends AngelCredentials {
   subscriptionMode: number;
+}
+
+interface TickWaiter {
+  resolve: (tick: Tick) => void;
+  reject: (err: Error) => void;
+  timer: NodeJS.Timeout;
 }
 
 export class AngelOneProvider implements MarketDataProvider {
@@ -35,8 +44,65 @@ export class AngelOneProvider implements MarketDataProvider {
   private instruments: Instrument[] = [];
   /** Single-flight guard: concurrent reconnects share one login promise. */
   private authInFlight: Promise<AngelSession> | null = null;
+  /** Pending tick-confirmation waiters, keyed by instrument token. */
+  private tickWaiters = new Map<string, TickWaiter>();
+  /** Last time ANY token produced a valid, non-stale tick. */
+  private lastValidTickTs: number | null = null;
 
   constructor(private opts: AngelOneProviderOptions) {}
+
+  /** True when the tick is usable for confirmation (live, priced). */
+  private isValidLiveTick(tick: Tick): boolean {
+    if (!(typeof tick.ltp === "number" && isFinite(tick.ltp) && tick.ltp > 0)) return false;
+    return !isStaleTick(tick, loadEnv().MAX_TICK_AGE_MS);
+  }
+
+  /** Feeds a decoded tick into the confirmation registry. */
+  private noteTick(tick: Tick): void {
+    if (!this.isValidLiveTick(tick)) return;
+    this.lastValidTickTs = Date.now();
+    const waiter = this.tickWaiters.get(tick.symbol);
+    if (!waiter) return;
+    clearTimeout(waiter.timer);
+    this.tickWaiters.delete(tick.symbol);
+    waiter.resolve(tick);
+  }
+
+  private rejectAllWaiters(reason: string): void {
+    for (const [token, waiter] of this.tickWaiters) {
+      clearTimeout(waiter.timer);
+      this.tickWaiters.delete(token);
+      waiter.reject(new Error(reason));
+    }
+  }
+
+  /** Timestamp of the last valid non-stale tick on any token (market-live hint). */
+  getLastValidTickTs(): number | null {
+    return this.lastValidTickTs;
+  }
+
+  /**
+   * Resolves with the first valid, non-stale tick for `token`, or rejects on
+   * timeout / websocket disconnect. Timers and waiters are always cleaned up.
+   */
+  waitForTick(token: string, timeoutMs: number): Promise<Tick> {
+    const key = String(token).trim();
+    const existing = this.tickWaiters.get(key);
+    if (existing) {
+      clearTimeout(existing.timer);
+      this.tickWaiters.delete(key);
+      existing.reject(new Error("superseded by a newer tick confirmation request"));
+    }
+    return new Promise<Tick>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.tickWaiters.delete(key);
+        reject(new Error("tick confirmation timeout"));
+      }, timeoutMs);
+      timer.unref?.();
+      this.tickWaiters.set(key, { resolve, reject, timer });
+    });
+  }
+
 
   /**
    * Returns a valid session, logging in only when the current one is missing
@@ -107,6 +173,8 @@ export class AngelOneProvider implements MarketDataProvider {
         onClose: () => {
           this.status.connected = false;
           if (this.ws) this.status.reconnectCount = this.ws.reconnectCount;
+          // Any pending tick confirmation can never complete on a dead socket.
+          this.rejectAllWaiters("websocket disconnected");
           this.emitStatus();
         },
         onError: (err) => logger.error({ err: err.message }, "[angelone] ws error"),
@@ -120,21 +188,22 @@ export class AngelOneProvider implements MarketDataProvider {
           this.status.ticksReceived++;
           this.status.lastTickTs = Date.now();
           this.status.currentContract = symbol;
-          for (const h of this.tickHandlers) {
-            h({
-              provider: this.name,
-              symbol,
-              instrumentId: `${dt.exchangeType}:${dt.token}`,
-              exchange,
-              ltp: dt.ltp,
-              bid: dt.bestBid,
-              ask: dt.bestAsk,
-              volume: dt.volume,
-              exchangeTs: dt.exchangeTs || undefined,
-              receivedTs: Date.now(),
-            });
-          }
+          const tick: Tick = {
+            provider: this.name,
+            symbol,
+            instrumentId: `${dt.exchangeType}:${dt.token}`,
+            exchange,
+            ltp: dt.ltp,
+            bid: dt.bestBid,
+            ask: dt.bestAsk,
+            volume: dt.volume,
+            exchangeTs: dt.exchangeTs || undefined,
+            receivedTs: Date.now(),
+          };
+          this.noteTick(tick);
+          for (const h of this.tickHandlers) h(tick);
         },
+
       },
     );
 
@@ -168,10 +237,12 @@ export class AngelOneProvider implements MarketDataProvider {
 
 
   async disconnect(): Promise<void> {
+    this.rejectAllWaiters("provider disconnected");
     if (this.ws) await this.ws.disconnect();
     this.status.connected = false;
     this.emitStatus();
   }
+
 
   onTick(handler: TickHandler): void {
     this.tickHandlers.push(handler);

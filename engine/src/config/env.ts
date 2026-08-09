@@ -43,6 +43,13 @@ const schema = z.object({
     .int()
     .positive()
     .default(6 * 60 * 60 * 1000),
+  /** How long to wait for the first valid tick on a new contract (ms). */
+  ROLLOVER_TICK_CONFIRM_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(60_000)
+    .default(30_000),
 
 
   ENABLED_TIMEFRAMES: z.string().default("1m"),
