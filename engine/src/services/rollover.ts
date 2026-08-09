@@ -259,7 +259,86 @@ export class RolloverService {
     }
 
   }
+
+  /**
+   * Waits for the first valid, non-stale tick on every newly subscribed token.
+   * Returns ok when confirmation succeeds, is unavailable, or is not required.
+   * `deferred` marks non-failures (market closed / websocket disconnected).
+   */
+  private async confirmTicks(
+    changed: ActiveContract[],
+  ): Promise<{ ok: boolean; deferred?: boolean; reason?: string }> {
+    const timeoutMs = this.opts.tickConfirmTimeoutMs ?? 0;
+    const waitForTick = this.opts.provider.waitForTick?.bind(this.opts.provider);
+    if (!waitForTick || timeoutMs <= 0) {
+      // Preserve pre-2.1 behaviour when confirmation is unavailable.
+      logger.info("[rollover] tick confirmation unavailable — proceeding without it");
+      return { ok: true };
+    }
+
+    for (const c of changed) {
+      const startedAt = Date.now();
+      tickConfirmation = {
+        pendingToken: c.token,
+        waitingSince: new Date(startedAt).toISOString(),
+        timeoutMs,
+        lastConfirmedToken: tickConfirmation.lastConfirmedToken,
+      };
+      logger.info(
+        { token: c.token, symbol: c.symbol, timeoutMs },
+        "[rollover] waiting for first tick",
+      );
+      try {
+        const tick = await waitForTick(c.token, timeoutMs);
+        tickConfirmation = {
+          pendingToken: null,
+          waitingSince: null,
+          timeoutMs,
+          lastConfirmedToken: c.token,
+        };
+        logger.info(
+          { token: c.token, ltp: tick.ltp, waitedMs: Date.now() - startedAt },
+          "[rollover] tick confirmation received",
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        tickConfirmation = {
+          pendingToken: null,
+          waitingSince: null,
+          timeoutMs,
+          lastConfirmedToken: tickConfirmation.lastConfirmedToken,
+        };
+
+        if (message.includes("disconnected")) {
+          logger.warn(
+            { token: c.token },
+            "[rollover] rollover aborted — websocket disconnected",
+          );
+          return { ok: false, deferred: true, reason: "websocket disconnected" };
+        }
+
+        // Market-closed heuristic: no token produced a live tick during the wait.
+        const lastValid = this.opts.provider.getLastValidTickTs?.() ?? null;
+        const marketClosed = lastValid === null || lastValid < startedAt;
+        if (marketClosed) {
+          logger.warn(
+            { token: c.token, lastValidTickTs: lastValid },
+            "[rollover] rollover deferred — market closed",
+          );
+          return { ok: false, deferred: true, reason: "market closed — no live ticks" };
+        }
+
+        logger.error(
+          { token: c.token, timeoutMs },
+          "[rollover] tick confirmation timeout",
+        );
+        return { ok: false, reason: "tick confirmation timeout" };
+      }
+    }
+    return { ok: true };
+  }
 }
+
 
 export function toActive(c: DiscoveredContract): ActiveContract {
   return { group: c.group, token: c.token, symbol: c.symbol, expiry: c.expiry };
