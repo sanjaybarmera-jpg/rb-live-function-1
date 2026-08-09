@@ -237,10 +237,12 @@ export class AngelOneProvider implements MarketDataProvider {
 
 
   async disconnect(): Promise<void> {
+    this.rejectAllWaiters("provider disconnected");
     if (this.ws) await this.ws.disconnect();
     this.status.connected = false;
     this.emitStatus();
   }
+
 
   onTick(handler: TickHandler): void {
     this.tickHandlers.push(handler);
