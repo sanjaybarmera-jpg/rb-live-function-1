@@ -103,6 +103,7 @@ async function main(): Promise<void> {
       provider: rolloverCapable as RolloverCapableProvider,
       enabled: env.ROLLOVER_ENABLED,
       intervalMs: env.ROLLOVER_CHECK_INTERVAL_MS,
+      tickConfirmTimeoutMs: env.ROLLOVER_TICK_CONFIRM_TIMEOUT_MS,
     });
     // Boot discovery just ran, so skip the immediate duplicate check.
     rollover.start(false);
