@@ -9,6 +9,13 @@ import {
 } from "./metals.js";
 import { currentSessionKey, sessionKeyFor } from "./session.js";
 
+export interface ContractMetadata {
+  group: MetalGroup;
+  contractSymbol: string;
+  contractMonth: string;
+  expiryDate: string;
+}
+
 interface SessionState {
   group: MetalGroup;
   sessionKey: string;
@@ -104,7 +111,10 @@ export class RatesWriter {
   private lastError: string | null = null;
   private initialized = false;
 
-  constructor(private flushIntervalMs: number = FLUSH_INTERVAL_MS) {}
+  constructor(
+    private flushIntervalMs: number = FLUSH_INTERVAL_MS,
+    private discoveredContracts: ContractMetadata[] = [],
+  ) {}
 
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -157,6 +167,28 @@ export class RatesWriter {
           continue;
         }
 
+        /*
+         * IMPORTANT:
+         * ScripMaster discovery is the source of truth for the CURRENT
+         * contract. Never allow an old contract stored in rates to override
+         * the freshly discovered contract.
+         */
+        const discovered = this.discoveredContracts.find(
+          (contract) => contract.group === group,
+        );
+
+        const contractSymbol =
+          discovered?.contractSymbol ??
+          String(data.contract_symbol ?? "");
+
+        const contractMonth =
+          discovered?.contractMonth ??
+          String(data.contract_month ?? "");
+
+        const expiryDate =
+          discovered?.expiryDate ??
+          String(data.expiry_date ?? "");
+
         this.sessions.set(group, {
           group,
           sessionKey: key,
@@ -164,9 +196,9 @@ export class RatesWriter {
           high,
           low,
           updated_at: toIso(updatedAt),
-          contract_symbol: String(data.contract_symbol ?? ""),
-          contract_month: String(data.contract_month ?? ""),
-          expiry_date: String(data.expiry_date ?? ""),
+          contract_symbol: contractSymbol,
+          contract_month: contractMonth,
+          expiry_date: expiryDate,
         });
 
         logger.info(
@@ -175,12 +207,40 @@ export class RatesWriter {
             sessionKey: key,
             high,
             low,
-            contract_symbol: data.contract_symbol,
-            contract_month: data.contract_month,
-            expiry_date: data.expiry_date,
+            dbContractSymbol: data.contract_symbol,
+            contract_symbol: contractSymbol,
+            contract_month: contractMonth,
+            expiry_date: expiryDate,
+            source: discovered ? "scripmaster" : "db",
           },
           "[rates] session restored from DB",
         );
+
+        /*
+         * If ScripMaster found a newer contract than the DB, mark the group
+         * dirty so the new metadata gets written immediately.
+         */
+        if (
+          discovered &&
+          (
+            String(data.contract_symbol ?? "") !== discovered.contractSymbol ||
+            String(data.contract_month ?? "") !== discovered.contractMonth ||
+            String(data.expiry_date ?? "") !== discovered.expiryDate
+          )
+        ) {
+          logger.info(
+            {
+              group,
+              previousContract: data.contract_symbol,
+              newContract: discovered.contractSymbol,
+              contractMonth: discovered.contractMonth,
+              expiryDate: discovered.expiryDate,
+            },
+            "[rates] discovered contract differs from DB — scheduling metadata update",
+          );
+
+          this.dirty.add(group);
+        }
       } catch (err) {
         logger.warn(
           {
@@ -190,6 +250,14 @@ export class RatesWriter {
           "[rates] session restore failed",
         );
       }
+    }
+
+    /*
+     * Flush discovered metadata immediately after initialization so the
+     * database does not remain on an expired/old contract until the first tick.
+     */
+    if (this.dirty.size > 0) {
+      await this.flush();
     }
   }
 
@@ -263,7 +331,6 @@ export class RatesWriter {
     }
 
     /*
-     * IMPORTANT:
      * Every live tick carries the current contract symbol.
      * Therefore when rollover changes GOLD/SILVER contract,
      * these fields automatically change on the next tick.
@@ -390,6 +457,13 @@ export class RatesWriter {
             "[rates] update failed",
           );
 
+          /*
+           * IMPORTANT:
+           * Do not lose the dirty flag when Supabase update fails.
+           * Retry it on the next flush.
+           */
+          this.dirty.add(group);
+
           continue;
         }
 
@@ -414,6 +488,13 @@ export class RatesWriter {
         { err: this.lastError },
         "[rates] flush failed",
       );
+
+      /*
+       * Retry all groups if the flush itself failed.
+       */
+      for (const group of groups) {
+        this.dirty.add(group);
+      }
     } finally {
       this.flushing = false;
     }
