@@ -11,25 +11,91 @@ import { currentSessionKey, sessionKeyFor } from "./session.js";
 
 interface SessionState {
   group: MetalGroup;
-  /** IST trading-day key this high/low belongs to. */
   sessionKey: string;
   mcx_ltp: number;
   high: number;
   low: number;
   updated_at: string;
+
+  // Current MCX futures contract metadata
+  contract_symbol: string;
+  contract_month: string;
+  expiry_date: string;
 }
 
 const FLUSH_INTERVAL_MS = 250;
 const GROUPS: MetalGroup[] = ["gold", "silver"];
 
+const MONTHS: Record<string, string> = {
+  JAN: "January",
+  FEB: "February",
+  MAR: "March",
+  APR: "April",
+  MAY: "May",
+  JUN: "June",
+  JUL: "July",
+  AUG: "August",
+  SEP: "September",
+  OCT: "October",
+  NOV: "November",
+  DEC: "December",
+};
+
 /**
- * Holds one persistent session state per metal group (gold, silver) and
- * flushes it to public.rates on a fixed interval.
+ * Extract contract metadata from symbols such as:
  *
- * high/low are MCX *session* extremes: they survive every flush, are restored
- * from Supabase on restart, and reset exactly once when a new MCX trading
- * session begins. Only the flush cadence is buffered — never the extremes.
+ * GOLD05OCT26FUT
+ * SILVER04SEP26FUT
+ * GOLDM28AUG26FUT
  */
+function parseContract(symbol: string): {
+  contractSymbol: string;
+  contractMonth: string;
+  expiryDate: string;
+} | null {
+  const normalized = symbol.trim().toUpperCase();
+
+  const match =
+    /^(GOLD|GOLDM|SILVER|SILVERM)(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})FUT$/.exec(
+      normalized,
+    );
+
+  if (!match) {
+    return null;
+  }
+
+  const day = Number(match[2]);
+  const monthCode = match[3];
+  const year = 2000 + Number(match[4]);
+
+  const monthName = MONTHS[monthCode];
+
+  if (!monthName) {
+    return null;
+  }
+
+  const monthNumber: Record<string, string> = {
+    JAN: "01",
+    FEB: "02",
+    MAR: "03",
+    APR: "04",
+    MAY: "05",
+    JUN: "06",
+    JUL: "07",
+    AUG: "08",
+    SEP: "09",
+    OCT: "10",
+    NOV: "11",
+    DEC: "12",
+  };
+
+  return {
+    contractSymbol: normalized,
+    contractMonth: `${monthName} ${year}`,
+    expiryDate: `${year}-${monthNumber[monthCode]}-${String(day).padStart(2, "0")}`,
+  };
+}
+
 export class RatesWriter {
   private sessions = new Map<MetalGroup, SessionState>();
   private dirty = new Set<MetalGroup>();
@@ -40,31 +106,42 @@ export class RatesWriter {
 
   constructor(private flushIntervalMs: number = FLUSH_INTERVAL_MS) {}
 
-  /**
-   * Restart safety: reload today's session high/low from public.rates when the
-   * stored row still belongs to the current MCX session.
-   */
   async init(): Promise<void> {
     if (this.initialized) return;
+
     this.initialized = true;
+
     const key = currentSessionKey();
+
     for (const group of GROUPS) {
       const metalType = metalTypesForGroup(group)[0] as string;
+
       try {
         const { data, error } = await getSupabase()
           .from("rates")
-          .select("mcx_ltp, high, low, updated_at")
+          .select(
+            "mcx_ltp, high, low, updated_at, contract_symbol, contract_month, expiry_date",
+          )
           .eq("metal_type", metalType)
           .maybeSingle();
+
         if (error) {
-          logger.warn({ err: error.message, group }, "[rates] session restore query failed");
+          logger.warn(
+            { err: error.message, group },
+            "[rates] session restore query failed",
+          );
           continue;
         }
+
         if (!data) continue;
 
-        const updatedAt = data.updated_at ? Date.parse(data.updated_at as string) : NaN;
+        const updatedAt = data.updated_at
+          ? Date.parse(data.updated_at as string)
+          : NaN;
+
         const high = Number(data.high);
         const low = Number(data.low);
+
         if (
           !isFinite(updatedAt) ||
           sessionKeyFor(updatedAt) !== key ||
@@ -87,14 +164,29 @@ export class RatesWriter {
           high,
           low,
           updated_at: toIso(updatedAt),
+          contract_symbol: String(data.contract_symbol ?? ""),
+          contract_month: String(data.contract_month ?? ""),
+          expiry_date: String(data.expiry_date ?? ""),
         });
+
         logger.info(
-          { group, sessionKey: key, high, low },
+          {
+            group,
+            sessionKey: key,
+            high,
+            low,
+            contract_symbol: data.contract_symbol,
+            contract_month: data.contract_month,
+            expiry_date: data.expiry_date,
+          },
           "[rates] session restored from DB",
         );
       } catch (err) {
         logger.warn(
-          { err: err instanceof Error ? err.message : String(err), group },
+          {
+            err: err instanceof Error ? err.message : String(err),
+            group,
+          },
           "[rates] session restore failed",
         );
       }
@@ -103,10 +195,15 @@ export class RatesWriter {
 
   start(): void {
     if (this.timer) return;
+
     this.timer = setInterval(() => {
       void this.flush();
     }, this.flushIntervalMs);
-    logger.info({ flushIntervalMs: this.flushIntervalMs }, "[rates] buffered writer started");
+
+    logger.info(
+      { flushIntervalMs: this.flushIntervalMs },
+      "[rates] buffered writer started",
+    );
   }
 
   async stop(): Promise<void> {
@@ -114,29 +211,80 @@ export class RatesWriter {
       clearInterval(this.timer);
       this.timer = null;
     }
+
     await this.flush();
+
     logger.info("[rates] buffered writer stopped");
   }
 
-  /** Non-blocking: folds the tick into the metal group's session state. */
   write(tick: Tick): void {
     const group = metalGroupForSymbol(tick.symbol);
+
     if (!group) return;
 
     const tsMs = tick.exchangeTs ?? tick.receivedTs;
     const key = sessionKeyFor(tsMs);
     const ts = toIso(tsMs);
+
     let state = this.sessions.get(group);
 
+    const contract = parseContract(tick.symbol);
+
     if (!state) {
-      state = { group, sessionKey: key, mcx_ltp: tick.ltp, high: tick.ltp, low: tick.ltp, updated_at: ts };
+      state = {
+        group,
+        sessionKey: key,
+        mcx_ltp: tick.ltp,
+        high: tick.ltp,
+        low: tick.ltp,
+        updated_at: ts,
+        contract_symbol: contract?.contractSymbol ?? tick.symbol,
+        contract_month: contract?.contractMonth ?? "",
+        expiry_date: contract?.expiryDate ?? "",
+      };
+
       this.sessions.set(group, state);
+
       logger.info(
-        { group, sessionKey: key, high: state.high, low: state.low },
+        {
+          group,
+          sessionKey: key,
+          high: state.high,
+          low: state.low,
+          contract_symbol: state.contract_symbol,
+          contract_month: state.contract_month,
+          expiry_date: state.expiry_date,
+        },
         "[rates] session initialized",
       );
+
       this.dirty.add(group);
       return;
+    }
+
+    /*
+     * IMPORTANT:
+     * Every live tick carries the current contract symbol.
+     * Therefore when rollover changes GOLD/SILVER contract,
+     * these fields automatically change on the next tick.
+     */
+    if (contract) {
+      if (state.contract_symbol !== contract.contractSymbol) {
+        logger.info(
+          {
+            group,
+            previousContract: state.contract_symbol,
+            newContract: contract.contractSymbol,
+            contractMonth: contract.contractMonth,
+            expiryDate: contract.expiryDate,
+          },
+          "[rates] contract changed",
+        );
+      }
+
+      state.contract_symbol = contract.contractSymbol;
+      state.contract_month = contract.contractMonth;
+      state.expiry_date = contract.expiryDate;
     }
 
     if (state.sessionKey !== key) {
@@ -150,38 +298,69 @@ export class RatesWriter {
         },
         "[rates] new MCX session detected",
       );
+
       state.sessionKey = key;
       state.high = tick.ltp;
       state.low = tick.ltp;
+
       logger.info(
-        { group, sessionKey: key, high: state.high, low: state.low },
+        {
+          group,
+          sessionKey: key,
+          high: state.high,
+          low: state.low,
+        },
         "[rates] session reset",
       );
     } else {
       if (tick.ltp > state.high) {
         state.high = tick.ltp;
-        logger.info({ group, sessionKey: key, high: state.high }, "[rates] new session high");
+
+        logger.info(
+          {
+            group,
+            sessionKey: key,
+            high: state.high,
+          },
+          "[rates] new session high",
+        );
       }
+
       if (tick.ltp < state.low) {
         state.low = tick.ltp;
-        logger.info({ group, sessionKey: key, low: state.low }, "[rates] new session low");
+
+        logger.info(
+          {
+            group,
+            sessionKey: key,
+            low: state.low,
+          },
+          "[rates] new session low",
+        );
       }
     }
 
     state.mcx_ltp = tick.ltp;
     state.updated_at = ts;
+
     this.dirty.add(group);
   }
 
   async flush(): Promise<void> {
     if (this.flushing || this.dirty.size === 0) return;
+
     this.flushing = true;
+
     const groups = Array.from(this.dirty);
+
     this.dirty.clear();
+
     try {
       for (const group of groups) {
         const state = this.sessions.get(group);
+
         if (!state) continue;
+
         const { error } = await getSupabase()
           .from("rates")
           .update({
@@ -189,18 +368,52 @@ export class RatesWriter {
             high: state.high,
             low: state.low,
             updated_at: state.updated_at,
+
+            // MCX contract metadata
+            contract_symbol: state.contract_symbol,
+            contract_month: state.contract_month,
+            expiry_date: state.expiry_date,
           })
-          .in("metal_type", metalTypesForGroup(group) as string[]);
+          .in(
+            "metal_type",
+            metalTypesForGroup(group) as string[],
+          );
+
         if (error) {
           this.lastError = error.message;
-          logger.error({ err: error.message, group }, "[rates] update failed");
+
+          logger.error(
+            {
+              err: error.message,
+              group,
+            },
+            "[rates] update failed",
+          );
+
           continue;
         }
+
+        logger.debug(
+          {
+            group,
+            contract_symbol: state.contract_symbol,
+            contract_month: state.contract_month,
+            expiry_date: state.expiry_date,
+            mcx_ltp: state.mcx_ltp,
+          },
+          "[rates] rate + contract metadata updated",
+        );
+
         this.lastError = null;
       }
     } catch (err) {
-      this.lastError = err instanceof Error ? err.message : String(err);
-      logger.error({ err: this.lastError }, "[rates] flush failed");
+      this.lastError =
+        err instanceof Error ? err.message : String(err);
+
+      logger.error(
+        { err: this.lastError },
+        "[rates] flush failed",
+      );
     } finally {
       this.flushing = false;
     }
