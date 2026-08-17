@@ -75,6 +75,12 @@ function parseContract(symbol: string): {
   const monthCode = match[3];
   const year = 2000 + Number(match[4]);
 
+  // TypeScript strict-mode safety:
+  // regex capture groups can technically be undefined.
+  if (!monthCode) {
+    return null;
+  }
+
   const monthName = MONTHS[monthCode];
 
   if (!monthName) {
@@ -96,10 +102,16 @@ function parseContract(symbol: string): {
     DEC: "12",
   };
 
+  const monthNumberValue = monthNumber[monthCode];
+
+  if (!monthNumberValue) {
+    return null;
+  }
+
   return {
     contractSymbol: normalized,
     contractMonth: `${monthName} ${year}`,
-    expiryDate: `${year}-${monthNumber[monthCode]}-${String(day).padStart(2, "0")}`,
+    expiryDate: `${year}-${monthNumberValue}-${String(day).padStart(2, "0")}`,
   };
 }
 
