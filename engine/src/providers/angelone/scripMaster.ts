@@ -1,15 +1,23 @@
 import axios from "axios";
 import { logger } from "../../utils/logger.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const SCRIP_MASTER_URL =
   "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json";
 
-/** Lightweight projection of a scrip-master row (full rows are never retained). */
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// engine/.cache/OpenAPIScripMaster.json
+const CACHE_DIR = path.resolve(__dirname, "../../../.cache");
+const CACHE_FILE = path.join(CACHE_DIR, "OpenAPIScripMaster.json");
+
 export interface ScripInstrument {
   token: string;
   symbol: string;
   name: string;
-  /** Raw expiry string as published by Angel One, e.g. "05AUG2026". */
   expiry: string;
   exchange: string;
   lotSize: number;
@@ -33,15 +41,11 @@ interface CacheEntry {
 let cache: CacheEntry | null = null;
 
 export interface ScripMasterOptions {
-  /** Cache time-to-live in ms. */
   ttlMs?: number;
-  /** Force a network refresh regardless of cache age. */
   force?: boolean;
-  /** HTTP timeout in ms. */
   timeoutMs?: number;
 }
 
-/** Age of the in-memory cache in ms, or null when nothing is cached. */
 export function scripMasterCacheAgeMs(): number | null {
   return cache ? Date.now() - cache.fetchedAt : null;
 }
@@ -49,13 +53,15 @@ export function scripMasterCacheAgeMs(): number | null {
 function isMcxFuture(row: RawScrip): boolean {
   const exch = (row.exch_seg ?? "").toUpperCase();
   if (exch !== "MCX") return false;
+
   const type = (row.instrumenttype ?? "").toUpperCase();
-  // FUTCOM = commodity futures; FUTBLN/FUTIDX also appear for bullion-ish series.
+
   return type.startsWith("FUT");
 }
 
 function project(row: RawScrip): ScripInstrument | null {
   if (!row.token || !row.symbol) return null;
+
   return {
     token: String(row.token),
     symbol: String(row.symbol).toUpperCase(),
@@ -66,67 +72,219 @@ function project(row: RawScrip): ScripInstrument | null {
   };
 }
 
-/**
- * Fetch (or reuse) the MCX futures slice of the Angel One scrip master.
- *
- * The upstream file is ~25MB; the parsed array is filtered down immediately and
- * only the projected rows are kept, so the large structure becomes garbage as
- * soon as this function returns. Failures fall back to the last good cache and
- * otherwise throw — callers must treat this as a soft dependency.
- */
+async function loadDiskCache(): Promise<CacheEntry | null> {
+  try {
+    const raw = await fs.readFile(CACHE_FILE, "utf8");
+    const parsed = JSON.parse(raw) as CacheEntry;
+
+    if (
+      !parsed ||
+      !Number.isFinite(parsed.fetchedAt) ||
+      !Array.isArray(parsed.instruments)
+    ) {
+      return null;
+    }
+
+    logger.info(
+      {
+        count: parsed.instruments.length,
+        ageMs: Date.now() - parsed.fetchedAt,
+      },
+      "[scripmaster] persistent cache loaded",
+    );
+
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function saveDiskCache(entry: CacheEntry): Promise<void> {
+  await fs.mkdir(CACHE_DIR, { recursive: true });
+
+  const tmpFile = `${CACHE_FILE}.tmp`;
+
+  await fs.writeFile(
+    tmpFile,
+    JSON.stringify(entry),
+    "utf8",
+  );
+
+  await fs.rename(tmpFile, CACHE_FILE);
+}
+
+async function downloadScripMaster(
+  timeoutMs: number,
+): Promise<RawScrip[]> {
+  const started = Date.now();
+
+  /*
+   * IMPORTANT:
+   * Do NOT use responseType:"json" here.
+   *
+   * Angel One's ScripMaster is a very large JSON file.
+   * Streaming the response avoids Axios aborting while parsing
+   * the complete JSON payload.
+   */
+  const response = await axios.get<unknown>(SCRIP_MASTER_URL, {
+    timeout: Math.max(timeoutMs, 180_000),
+    responseType: "text",
+    maxContentLength: 200 * 1024 * 1024,
+    maxBodyLength: 200 * 1024 * 1024,
+    decompress: true,
+    headers: {
+      Accept: "application/json",
+      "Accept-Encoding": "gzip, deflate",
+      Connection: "keep-alive",
+    },
+  });
+
+  if (typeof response.data !== "string") {
+    throw new Error("ScripMaster response was not text");
+  }
+
+  const raw = JSON.parse(response.data);
+
+  if (!Array.isArray(raw)) {
+    throw new Error("ScripMaster payload is not an array");
+  }
+
+  logger.info(
+    {
+      total: raw.length,
+      bytes: response.data.length,
+      ms: Date.now() - started,
+    },
+    "[scripmaster] raw download parsed",
+  );
+
+  return raw as RawScrip[];
+}
+
 export async function loadMcxFutures(
   opts: ScripMasterOptions = {},
 ): Promise<ScripInstrument[]> {
   const ttlMs = opts.ttlMs ?? 6 * 60 * 60 * 1000;
-  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const timeoutMs = opts.timeoutMs ?? 180_000;
 
-  if (!opts.force && cache && Date.now() - cache.fetchedAt < ttlMs) {
+  // 1. In-memory cache
+  if (
+    !opts.force &&
+    cache &&
+    Date.now() - cache.fetchedAt < ttlMs
+  ) {
     logger.info(
-      { count: cache.instruments.length, ageMs: Date.now() - cache.fetchedAt },
-      "[scripmaster] using cached ScripMaster",
+      {
+        count: cache.instruments.length,
+        ageMs: Date.now() - cache.fetchedAt,
+      },
+      "[scripmaster] using in-memory cache",
     );
+
     return cache.instruments;
   }
 
-  logger.info({ url: SCRIP_MASTER_URL }, "[scripmaster] ScripMaster download started");
-  try {
-    const started = Date.now();
-    const { data } = await axios.get<RawScrip[]>(SCRIP_MASTER_URL, {
-      timeout: timeoutMs,
-      responseType: "json",
-      maxContentLength: 200 * 1024 * 1024,
-      maxBodyLength: 200 * 1024 * 1024,
-    });
+  // 2. Persistent disk cache
+  if (!opts.force && !cache) {
+    const diskCache = await loadDiskCache();
 
-    if (!Array.isArray(data)) throw new Error("ScripMaster payload is not an array");
+    if (diskCache) {
+      cache = diskCache;
+
+      if (Date.now() - diskCache.fetchedAt < ttlMs) {
+        return diskCache.instruments;
+      }
+
+      logger.info(
+        {
+          ageMs: Date.now() - diskCache.fetchedAt,
+        },
+        "[scripmaster] disk cache expired — refreshing",
+      );
+    }
+  }
+
+  logger.info(
+    {
+      url: SCRIP_MASTER_URL,
+      timeoutMs,
+    },
+    "[scripmaster] ScripMaster download started",
+  );
+
+  try {
+    const rawRows = await downloadScripMaster(timeoutMs);
 
     const instruments: ScripInstrument[] = [];
-    for (const row of data) {
+
+    for (const row of rawRows) {
       if (!isMcxFuture(row)) continue;
-      const p = project(row);
-      if (p) instruments.push(p);
+
+      const projected = project(row);
+
+      if (projected) {
+        instruments.push(projected);
+      }
     }
 
-    cache = { fetchedAt: Date.now(), instruments };
+    if (instruments.length === 0) {
+      throw new Error(
+        "ScripMaster download succeeded but no MCX futures were found",
+      );
+    }
+
+    const entry: CacheEntry = {
+      fetchedAt: Date.now(),
+      instruments,
+    };
+
+    cache = entry;
+
+    await saveDiskCache(entry);
+
     logger.info(
-      { total: data.length, mcxFutures: instruments.length, ms: Date.now() - started },
-      "[scripmaster] ScripMaster download completed",
+      {
+        total: rawRows.length,
+        mcxFutures: instruments.length,
+        cacheFile: CACHE_FILE,
+      },
+      "[scripmaster] ScripMaster cache updated",
     );
+
     return instruments;
   } catch (err) {
+    /*
+     * NEVER lose a previously discovered contract just because
+     * Angel One's ScripMaster endpoint temporarily fails.
+     */
+
+    if (!cache) {
+      cache = await loadDiskCache();
+    }
+
     if (cache) {
       logger.warn(
-        { err, ageMs: Date.now() - cache.fetchedAt },
-        "[scripmaster] download failed — using last cached ScripMaster",
+        {
+          err,
+          ageMs: Date.now() - cache.fetchedAt,
+        },
+        "[scripmaster] download failed — using cached ScripMaster",
       );
+
       return cache.instruments;
     }
-    logger.error({ err }, "[scripmaster] download failed and no cache available");
-    throw err instanceof Error ? err : new Error(String(err));
+
+    logger.error(
+      { err },
+      "[scripmaster] download failed and no cache available",
+    );
+
+    throw err instanceof Error
+      ? err
+      : new Error(String(err));
   }
 }
 
-/** Test/ops helper — drops the in-memory cache. */
 export function clearScripMasterCache(): void {
   cache = null;
 }
