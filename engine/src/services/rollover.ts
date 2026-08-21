@@ -254,13 +254,57 @@ export class RolloverService {
       }
 
       // 5. Update the active list.
-      const next = [...current.filter((p) => !changed.some((c) => c.group === p.group)), ...changed];
-      state.currentContracts = next;
-      state.lastRolloverTime = new Date().toISOString();
-      state.lastRolloverStatus = "success";
-      state.rolloverCount++;
-      delete state.lastError;
-      logger.info({ contracts: next }, "[rollover] rollover complete");
+     const next = [
+  ...current.filter(
+    (p) =>
+      !changed.some(
+        (c) =>
+          c.group === p.group,
+      ),
+  ),
+  ...changed,
+];
+
+state.currentContracts = next;
+
+state.lastRolloverTime =
+  new Date().toISOString();
+
+state.lastRolloverStatus =
+  "success";
+
+state.rolloverCount++;
+
+delete state.lastError;
+
+/*
+ * IMPORTANT:
+ *
+ * RatesWriter must receive the new ScripMaster
+ * contract immediately after rollover succeeds.
+ *
+ * This prevents the DB from continuing to show
+ * the previous contract metadata.
+ */
+try {
+  this.opts.onContractsChanged?.(
+    next,
+  );
+} catch (callbackErr) {
+  logger.error(
+    {
+      err: callbackErr,
+    },
+    "[rollover] contract metadata callback failed",
+  );
+}
+
+logger.info(
+  {
+    contracts: next,
+  },
+  "[rollover] rollover complete",
+);
     } catch (err) {
       // Restore runtime mappings exactly as they were; subscriptions are left
       // as-is so the engine never ends up with zero contracts.
