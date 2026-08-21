@@ -8,6 +8,7 @@ import {
 } from "./providers/angelone/instruments.js";
 
 import { setDiscoveryState } from "./services/discoveryState.js";
+import { setTokenGroup } from "./services/metals.js"; // <-- Added
 
 import {
   RolloverService,
@@ -17,14 +18,9 @@ import {
   type RolloverCapableProvider,
 } from "./services/rollover.js";
 
-import {
-  MarketEngine,
-} from "./engine/MarketEngine.js";
-
+import { MarketEngine } from "./engine/MarketEngine.js";
 import { HealthServer } from "./services/HealthServer.js";
-
 import type { Instrument } from "./providers/types.js";
-
 import type { ContractMetadata } from "./services/RatesWriter.js";
 
 interface ResolvedInstruments {
@@ -35,7 +31,6 @@ interface ResolvedInstruments {
 
 /**
  * Resolve subscription instruments and contract metadata.
- *
  * ScripMaster is the source of truth in AUTO mode.
  */
 async function resolveInstruments(
@@ -63,37 +58,32 @@ async function resolveInstruments(
   try {
     const result = await discoverInstruments();
 
+    // Register tokens dynamically into metals.ts
+    for (const c of result.contracts) {
+      setTokenGroup(c.token, c.group);
+    }
+
     setDiscoveryState({
       mode: "auto",
       source: "scripmaster",
       timestamp: result.discoveredAt,
 
-      goldToken:
-        result.contracts.find(
-          (c) => c.group === "gold",
-        )?.token,
-
-      silverToken:
-        result.contracts.find(
-          (c) => c.group === "silver",
-        )?.token,
-
-      cacheAgeMs:
-        result.cacheAgeMs,
+      goldToken: result.contracts.find((c) => c.group === "gold")?.token,
+      silverToken: result.contracts.find((c) => c.group === "silver")?.token,
+      cacheAgeMs: result.cacheAgeMs,
     });
 
     /*
      * Convert discovery contracts into the exact metadata
      * RatesWriter needs.
      */
-    const rateContracts: ContractMetadata[] =
-      result.contracts.map((c) => ({
-        group: c.group,
-        token: c.token,
-        contractSymbol: c.symbol,
-        contractMonth: buildContractMonth(c.expiry),
-        expiryDate: buildExpiryDate(c.expiry),
-      }));
+    const rateContracts: ContractMetadata[] = result.contracts.map((c) => ({
+      group: c.group,
+      token: c.token,
+      contractSymbol: c.symbol,
+      contractMonth: buildContractMonth(c.expiry),
+      expiryDate: buildExpiryDate(c.expiry),
+    }));
 
     logger.info(
       {
@@ -104,10 +94,7 @@ async function resolveInstruments(
 
     return {
       instruments: result.instruments,
-
-      contracts:
-        result.contracts.map(toActive),
-
+      contracts: result.contracts.map(toActive),
       rateContracts,
     };
   } catch (err) {
@@ -124,48 +111,27 @@ async function resolveInstruments(
       mode: "auto",
       source: "env-fallback",
       timestamp: new Date().toISOString(),
-      error:
-        err instanceof Error
-          ? err.message
-          : String(err),
+      error: err instanceof Error ? err.message : String(err),
     });
 
     return {
-      instruments:
-        loadConfiguredInstruments(),
-
+      instruments: loadConfiguredInstruments(),
       contracts: [],
-
       rateContracts: [],
     };
   }
 }
 
 /**
- * Convert Angel One expiry:
- *
- * 05OCT2026
- *
- * into:
- *
- * October 2026
+ * Convert Angel One expiry (e.g. 05OCT2026) into "October 2026"
  */
-function buildContractMonth(
-  expiry: string,
-): string {
-  const normalized =
-    expiry
-      .trim()
-      .toUpperCase();
+function buildContractMonth(expiry: string): string {
+  const normalized = expiry.trim().toUpperCase();
+  const match = /^(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{4})$/.exec(
+    normalized,
+  );
 
-  const match =
-    /^(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{4})$/.exec(
-      normalized,
-    );
-
-  if (!match) {
-    return "";
-  }
+  if (!match) return "";
 
   const monthNames: Record<string, string> = {
     JAN: "January",
@@ -182,41 +148,22 @@ function buildContractMonth(
     DEC: "December",
   };
 
-  const month =
-    monthNames[match[2]];
-
-  if (!month) {
-    return "";
-  }
+  const month = monthNames[match[2]];
+  if (!month) return "";
 
   return `${month} ${match[3]}`;
 }
 
 /**
- * Convert Angel One expiry:
- *
- * 05OCT2026
- *
- * into:
- *
- * 2026-10-05
+ * Convert Angel One expiry (e.g. 05OCT2026) into "2026-10-05"
  */
-function buildExpiryDate(
-  expiry: string,
-): string {
-  const normalized =
-    expiry
-      .trim()
-      .toUpperCase();
+function buildExpiryDate(expiry: string): string {
+  const normalized = expiry.trim().toUpperCase();
+  const match = /^(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{4})$/.exec(
+    normalized,
+  );
 
-  const match =
-    /^(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{4})$/.exec(
-      normalized,
-    );
-
-  if (!match) {
-    return "";
-  }
+  if (!match) return "";
 
   const monthNumbers: Record<string, string> = {
     JAN: "01",
@@ -233,14 +180,10 @@ function buildExpiryDate(
     DEC: "12",
   };
 
-  const month =
-    monthNumbers[match[2]];
+  const month = monthNumbers[match[2]];
+  if (!month) return "";
 
-  if (!month) {
-    return "";
-  }
-
-  return `${match[3]}-${month}-${match[1]}`;
+  return `${match[3]}-${month}-${match}`;
 }
 
 async function main(): Promise<void> {
@@ -251,17 +194,11 @@ async function main(): Promise<void> {
     "[boot] rb-live-engine starting",
   );
 
-  const provider =
-    createProvider("angelone");
+  const provider = createProvider("angelone");
 
-  const {
-    instruments,
-    contracts,
-    rateContracts,
-  } =
-    await resolveInstruments(
-      env.INSTRUMENT_DISCOVERY,
-    );
+  const { instruments, contracts, rateContracts } = await resolveInstruments(
+    env.INSTRUMENT_DISCOVERY,
+  );
 
   if (instruments.length === 0) {
     logger.warn(
@@ -269,214 +206,90 @@ async function main(): Promise<void> {
     );
   }
 
-  /*
-   * IMPORTANT:
-   *
-   * Pass discovered ScripMaster contract metadata
-   * into MarketEngine -> RatesWriter.
-   */
-  const engine =
-    new MarketEngine({
-      provider,
+  const engine = new MarketEngine({
+    provider,
+    instruments,
+    enabledTimeframes: env.ENABLED_TIMEFRAMES,
+    historyThrottleMs: env.HISTORY_THROTTLE_MS,
+    maxTickAgeMs: env.MAX_TICK_AGE_MS,
+    discoveredContracts: rateContracts,
+  });
 
-      instruments,
-
-      enabledTimeframes:
-        env.ENABLED_TIMEFRAMES,
-
-      historyThrottleMs:
-        env.HISTORY_THROTTLE_MS,
-
-      maxTickAgeMs:
-        env.MAX_TICK_AGE_MS,
-
-      discoveredContracts:
-        rateContracts,
-    });
-
-  const health =
-    new HealthServer(
-      env.PORT,
-      () => engine.snapshot(),
-    );
-
+  const health = new HealthServer(env.PORT, () => engine.snapshot());
   health.start();
 
   await engine.start();
 
-  /*
-   * Seed rollover state.
-   */
-  setActiveContracts(
-    contracts,
-  );
+  // Seed rollover state
+  setActiveContracts(contracts);
 
-  const rolloverCapable =
-    provider as unknown as
-      Partial<RolloverCapableProvider>;
-
-  let rollover:
-    RolloverService | null = null;
+  const rolloverCapable = provider as unknown as Partial<RolloverCapableProvider>;
+  let rollover: RolloverService | null = null;
 
   if (
     env.INSTRUMENT_DISCOVERY === "auto" &&
-    typeof rolloverCapable.subscribeInstruments ===
-      "function" &&
-    typeof rolloverCapable.unsubscribeInstruments ===
-      "function" &&
-    typeof rolloverCapable.getSubscribed ===
-      "function"
+    typeof rolloverCapable.subscribeInstruments === "function" &&
+    typeof rolloverCapable.unsubscribeInstruments === "function" &&
+    typeof rolloverCapable.getSubscribed === "function"
   ) {
-    rollover =
-      new RolloverService({
-        provider:
-          rolloverCapable as RolloverCapableProvider,
+    rollover = new RolloverService({
+      provider: rolloverCapable as RolloverCapableProvider,
+      enabled: env.ROLLOVER_ENABLED,
+      intervalMs: env.ROLLOVER_CHECK_INTERVAL_MS,
+      tickConfirmTimeoutMs: env.ROLLOVER_TICK_CONFIRM_TIMEOUT_MS,
+      onContractsChanged: (newContracts) => {
+        const metadata: ContractMetadata[] = newContracts.map((c) => ({
+          group: c.group,
+          token: c.token,
+          contractSymbol: c.symbol,
+          contractMonth: buildContractMonth(c.expiry),
+          expiryDate: buildExpiryDate(c.expiry),
+        }));
 
-        enabled:
-          env.ROLLOVER_ENABLED,
+        logger.info(
+          { contracts: metadata },
+          "[boot] rollover contract metadata received by RatesWriter",
+        );
 
-        intervalMs:
-          env.ROLLOVER_CHECK_INTERVAL_MS,
+        engine.setDiscoveredContracts(metadata);
+      },
+    });
 
-        tickConfirmTimeoutMs:
-          env.ROLLOVER_TICK_CONFIRM_TIMEOUT_MS,
-
-        /*
-         * IMPORTANT:
-         *
-         * Whenever rollover discovers a new contract,
-         * update RatesWriter immediately.
-         */
-        onContractsChanged:
-          (newContracts) => {
-            const metadata: ContractMetadata[] =
-              newContracts.map((c) => ({
-                group: c.group,
-                token: c.token,
-                contractSymbol: c.symbol,
-                contractMonth:
-                  buildContractMonth(
-                    c.expiry,
-                  ),
-                expiryDate:
-                  buildExpiryDate(
-                    c.expiry,
-                  ),
-              }));
-
-            logger.info(
-              {
-                contracts:
-                  metadata,
-              },
-              "[boot] rollover contract metadata received by RatesWriter",
-            );
-
-            engine.setDiscoveredContracts(
-              metadata,
-            );
-          },
-      });
-
-    /*
-     * Boot discovery already happened.
-     * Therefore skip duplicate immediate check.
-     */
     rollover.start(false);
-  } else if (
-    env.ROLLOVER_ENABLED
-  ) {
-    logger.info(
-      "[rollover] not started — discovery mode is ENV",
-    );
   }
 
   let shuttingDown = false;
 
-  const shutdown =
-    async (signal: string) => {
-      if (shuttingDown) return;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
 
-      shuttingDown = true;
+    logger.info({ signal }, "[boot] shutdown signal received");
 
-      logger.info(
-        { signal },
-        "[boot] shutdown signal received",
-      );
+    const force = setTimeout(() => {
+      logger.warn("[boot] graceful shutdown timed out — forcing exit");
+      process.exit(1);
+    }, 10_000);
 
-      /*
-       * Hard-exit guard.
-       */
-      const force =
-        setTimeout(() => {
-          logger.warn(
-            "[boot] graceful shutdown timed out — forcing exit",
-          );
+    force.unref();
 
-          process.exit(1);
-        }, 10_000);
+    try {
+      rollover?.stop();
+      await engine.stop();
+      await health.stop();
+    } catch (err) {
+      logger.error({ err }, "[boot] error during shutdown");
+    } finally {
+      clearTimeout(force);
+      process.exit(0);
+    }
+  };
 
-      force.unref();
-
-      try {
-        rollover?.stop();
-
-        await engine.stop();
-
-        await health.stop();
-      } catch (err) {
-        logger.error(
-          { err },
-          "[boot] error during shutdown",
-        );
-      } finally {
-        clearTimeout(force);
-
-        process.exit(0);
-      }
-    };
-
-  process.on(
-    "SIGINT",
-    () => void shutdown("SIGINT"),
-  );
-
-  process.on(
-    "SIGTERM",
-    () => void shutdown("SIGTERM"),
-  );
-
-  process.on(
-    "unhandledRejection",
-    (reason) =>
-      logger.error(
-        { reason },
-        "[boot] unhandled rejection",
-      ),
-  );
-
-  process.on(
-    "uncaughtException",
-    (err) => {
-      logger.error(
-        { err },
-        "[boot] uncaught exception",
-      );
-
-      void shutdown(
-        "uncaughtException",
-      ).then(() =>
-        process.exit(1),
-      );
-    },
-  );
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 }
 
 main().catch((err) => {
-  logger.error(
-    { err },
-    "[boot] fatal error",
-  );
-
+  logger.error({ err }, "[boot] fatal error");
   process.exit(1);
 });
