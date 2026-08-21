@@ -79,10 +79,23 @@ export interface RolloverOptions {
   provider: RolloverCapableProvider;
   enabled: boolean;
   intervalMs: number;
+
   /** Tick confirmation timeout in ms. 0 / omitted disables confirmation. */
   tickConfirmTimeoutMs?: number;
-}
 
+  /**
+   * Called after ScripMaster discovers a new active contract set.
+   *
+   * RatesWriter uses this to immediately update:
+   * - contract_symbol
+   * - contract_month
+   * - expiry_date
+   * - token mapping
+   */
+  onContractsChanged?: (
+    contracts: ActiveContract[],
+  ) => void;
+}
 
 export class RolloverService {
   private timer: NodeJS.Timeout | null = null;
