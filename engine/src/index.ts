@@ -148,10 +148,13 @@ function buildContractMonth(expiry: string): string {
     DEC: "December",
   };
 
-  const month = monthNames[match[2]];
-  if (!month) return "";
+  const mon = match[2];
+  const year = match[3];
 
-  return `${month} ${match[3]}`;
+  const monthName = monthNames[mon];
+  if (!monthName) return "";
+
+  return `${monthName} ${year}`;
 }
 
 /**
@@ -180,10 +183,14 @@ function buildExpiryDate(expiry: string): string {
     DEC: "12",
   };
 
-  const month = monthNumbers[match[2]];
-  if (!month) return "";
+  const day = match;
+  const mon = match[2];
+  const year = match[3];
 
-  return `${match[3]}-${month}-${match}`;
+  const monthNumber = monthNumbers[mon];
+  if (!monthNumber) return "";
+
+  return `${year}-${monthNumber}-${day}`;
 }
 
 async function main(): Promise<void> {
