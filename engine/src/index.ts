@@ -8,7 +8,7 @@ import {
 } from "./providers/angelone/instruments.js";
 
 import { setDiscoveryState } from "./services/discoveryState.js";
-import { setTokenGroup } from "./services/metals.js"; // <-- Added
+import { setTokenGroup } from "./services/metals.js";
 
 import {
   RolloverService,
