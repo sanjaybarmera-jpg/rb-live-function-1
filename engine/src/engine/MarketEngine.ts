@@ -38,31 +38,20 @@ export interface MarketEngineOptions {
 
 export class MarketEngine {
   private queue = new BoundedQueue<Tick>(10_000);
-
   private aggregator: CandleAggregator;
-
   private rates: RatesWriter;
-
   private history: RatesHistoryWriter;
-
   private candles = new CandleWriter();
 
   private started = Date.now();
-
   private tickCounter = 0;
-
   private tickReportTimer: NodeJS.Timeout | null = null;
-
   private candleFlushTimer: NodeJS.Timeout | null = null;
 
   private draining = false;
-
   private stopping = false;
-
   private staleTickCount = 0;
-
   private lastStaleLogAt = 0;
-
   private lastLiveTickTs = 0;
 
   private get maxTickAgeMs(): number {
@@ -78,36 +67,11 @@ export class MarketEngine {
       opts.historyThrottleMs,
     );
 
-    /*
-     * IMPORTANT:
-     *
-     * Pass ScripMaster discovery directly into RatesWriter.
-     *
-     * Previously this was:
-     *
-     *   private rates = new RatesWriter();
-     *
-     * which meant discoveredContracts = [].
-     *
-     * That caused Gold to restore an empty contract_symbol
-     * from the database.
-     */
     this.rates = new RatesWriter(
       undefined,
       opts.discoveredContracts ?? [],
     );
 
-    /*
-     * Every Angel One tick comes through this single pipeline.
-     *
-     * RatesWriter is responsible for:
-     *   - mcx_ltp
-     *   - high
-     *   - low
-     *   - contract_symbol
-     *   - contract_month
-     *   - expiry_date
-     */
     opts.provider.onTick((tick) => {
       this.onTick(tick);
     });
@@ -123,17 +87,18 @@ export class MarketEngine {
 
   /**
    * Update the contracts known to RatesWriter.
-   *
-   * Called by automatic rollover after ScripMaster discovers
-   * a new active contract.
+   * Called by automatic rollover after ScripMaster discovers a new active contract.
    */
-  setDiscoveredContracts(
-    contracts: ContractMetadata[],
-  ): void {
+  setDiscoveredContracts(contracts: ContractMetadata[]): void {
     this.rates.setDiscoveredContracts(contracts);
   }
 
   async start(): Promise<void> {
+    // Explicitly guarantee RatesWriter has the discovered contracts before session init
+    if (this.opts.discoveredContracts && this.opts.discoveredContracts.length > 0) {
+      this.rates.setDiscoveredContracts(this.opts.discoveredContracts);
+    }
+
     logger.info(
       {
         provider: this.opts.provider.name,
@@ -152,11 +117,8 @@ export class MarketEngine {
     /*
      * Restore today's high/low and existing contract metadata
      * before receiving live ticks.
-     *
-     * ScripMaster metadata has already been supplied to RatesWriter.
      */
     await this.rates.init();
-
     this.rates.start();
 
     /*
@@ -187,8 +149,7 @@ export class MarketEngine {
     }, 60_000);
 
     /*
-     * Keep currently-open candles persisted while live ticks
-     * are still arriving.
+     * Keep currently-open candles persisted while live ticks are arriving.
      */
     this.candleFlushTimer = setInterval(() => {
       if (
@@ -220,37 +181,21 @@ export class MarketEngine {
       this.candleFlushTimer = null;
     }
 
-    /*
-     * Disconnect websocket first.
-     */
     await this.opts.provider.disconnect();
-
-    /*
-     * Flush remaining rate data, including contract metadata.
-     */
     await this.rates.stop();
 
     logger.info("[engine] stopped");
   }
 
   private onTick(raw: Tick): void {
-    /*
-     * First validate the provider tick.
-     */
     if (!validateTick(raw)) {
       return;
     }
 
-    /*
-     * Normalize provider-specific tick into our common Tick model.
-     */
     const tick = stampTick(
       normalizeTick(raw),
     );
 
-    /*
-     * Ignore stale/replayed ticks.
-     */
     if (
       isStaleTick(
         tick,
@@ -258,13 +203,9 @@ export class MarketEngine {
       )
     ) {
       this.staleTickCount++;
-
       const now = Date.now();
 
-      if (
-        now - this.lastStaleLogAt >
-        60_000
-      ) {
+      if (now - this.lastStaleLogAt > 60_000) {
         this.lastStaleLogAt = now;
 
         logger.info(
@@ -272,9 +213,7 @@ export class MarketEngine {
             symbol: tick.symbol,
             exchangeTs: tick.exchangeTs,
             ageSec: tick.exchangeTs
-              ? Math.floor(
-                  (now - tick.exchangeTs) / 1000,
-                )
+              ? Math.floor((now - tick.exchangeTs) / 1000)
               : undefined,
             maxTickAgeMs: this.maxTickAgeMs,
             staleTickCount: this.staleTickCount,
@@ -286,21 +225,10 @@ export class MarketEngine {
       return;
     }
 
-    /*
-     * We have a genuinely live tick.
-     */
     this.lastLiveTickTs = Date.now();
-
     this.tickCounter++;
-
-    /*
-     * Put tick into bounded processing queue.
-     */
     this.queue.push(tick);
 
-    /*
-     * Start drain immediately if it is not already running.
-     */
     if (!this.draining) {
       this.drain();
     }
@@ -314,37 +242,19 @@ export class MarketEngine {
     this.draining = true;
 
     try {
-      while (
-        this.queue.size > 0 &&
-        !this.stopping
-      ) {
+      while (this.queue.size > 0 && !this.stopping) {
         const tick = this.queue.shift();
-
-        if (!tick) {
-          break;
-        }
+        if (!tick) break;
 
         try {
-          /*
-           * RatesWriter receives the normalized tick.
-           *
-           * Contract metadata comes from ScripMaster discovery,
-           * NOT from the tick symbol.
-           */
           this.rates.write(tick);
 
-          /*
-           * Historical rate storage.
-           */
           await this.history
             .write(tick)
             .catch(() => {
               /* Error already logged by writer */
             });
 
-          /*
-           * Candle aggregation.
-           */
           this.aggregator.ingest(tick);
         } catch (err) {
           logger.error(
@@ -364,60 +274,30 @@ export class MarketEngine {
   }
 
   snapshot() {
-    const status =
-      this.opts.provider.getStatus();
+    const status = this.opts.provider.getStatus();
 
     return {
       connected: status.connected,
-
-      providerName:
-        status.providerName,
-
-      currentContract:
-        status.currentContract,
-
-      lastTickTime:
-        status.lastTickTs
-          ? new Date(
-              status.lastTickTs,
-            ).toISOString()
-          : undefined,
-
-      ticksReceived:
-        status.ticksReceived,
-
+      providerName: status.providerName,
+      currentContract: status.currentContract,
+      lastTickTime: status.lastTickTs
+        ? new Date(status.lastTickTs).toISOString()
+        : undefined,
+      ticksReceived: status.ticksReceived,
       dbStatus:
         this.rates.healthy &&
         this.history.healthy &&
         this.candles.healthy,
-
-      reconnectCount:
-        status.reconnectCount,
-
-      engineUptimeSec:
-        Math.floor(
-          (Date.now() - this.started) /
-            1000,
-        ),
-
-      staleTicksIgnored:
-        this.staleTickCount,
-
-      lastLiveTickTime:
-        this.lastLiveTickTs
-          ? new Date(
-              this.lastLiveTickTs,
-            ).toISOString()
-          : undefined,
-
+      reconnectCount: status.reconnectCount,
+      engineUptimeSec: Math.floor((Date.now() - this.started) / 1000),
+      staleTicksIgnored: this.staleTickCount,
+      lastLiveTickTime: this.lastLiveTickTs
+        ? new Date(this.lastLiveTickTs).toISOString()
+        : undefined,
       marketLive:
         this.maxTickAgeMs <= 0 ||
-        (
-          this.lastLiveTickTs > 0 &&
-          Date.now() -
-            this.lastLiveTickTs <=
-            this.maxTickAgeMs
-        ),
+        (this.lastLiveTickTs > 0 &&
+          Date.now() - this.lastLiveTickTs <= this.maxTickAgeMs),
     };
   }
 }
