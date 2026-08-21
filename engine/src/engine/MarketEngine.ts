@@ -10,7 +10,7 @@ import {
 import { BoundedQueue } from "./queue.js";
 import { CandleAggregator } from "./candles/CandleAggregator.js";
 import { parseTimeframes } from "./candles/timeframes.js";
-import { RatesWriter } from "../services/RatesWriter.js";
+import { RatesWriter, type ContractMetadata } from "../services/RatesWriter.js";
 import { RatesHistoryWriter } from "../services/RatesHistoryWriter.js";
 import { CandleWriter } from "../services/CandleWriter.js";
 
@@ -22,6 +22,18 @@ export interface MarketEngineOptions {
 
   /** Ignore ticks whose exchange timestamp is older than this (ms). 0 disables. */
   maxTickAgeMs?: number;
+
+  /**
+   * Contracts discovered from Angel One ScripMaster.
+   *
+   * IMPORTANT:
+   * RatesWriter uses these as the source of truth for:
+   * - contract_symbol
+   * - contract_month
+   * - expiry_date
+   * - token
+   */
+  discoveredContracts?: ContractMetadata[];
 }
 
 export class MarketEngine {
@@ -29,7 +41,7 @@ export class MarketEngine {
 
   private aggregator: CandleAggregator;
 
-  private rates = new RatesWriter();
+  private rates: RatesWriter;
 
   private history: RatesHistoryWriter;
 
@@ -67,6 +79,25 @@ export class MarketEngine {
     );
 
     /*
+     * IMPORTANT:
+     *
+     * Pass ScripMaster discovery directly into RatesWriter.
+     *
+     * Previously this was:
+     *
+     *   private rates = new RatesWriter();
+     *
+     * which meant discoveredContracts = [].
+     *
+     * That caused Gold to restore an empty contract_symbol
+     * from the database.
+     */
+    this.rates = new RatesWriter(
+      undefined,
+      opts.discoveredContracts ?? [],
+    );
+
+    /*
      * Every Angel One tick comes through this single pipeline.
      *
      * RatesWriter is responsible for:
@@ -76,8 +107,6 @@ export class MarketEngine {
      *   - contract_symbol
      *   - contract_month
      *   - expiry_date
-     *
-     * Therefore MarketEngine must NOT hardcode any contract information.
      */
     opts.provider.onTick((tick) => {
       this.onTick(tick);
@@ -92,10 +121,30 @@ export class MarketEngine {
     });
   }
 
+  /**
+   * Update the contracts known to RatesWriter.
+   *
+   * Called by automatic rollover after ScripMaster discovers
+   * a new active contract.
+   */
+  setDiscoveredContracts(
+    contracts: ContractMetadata[],
+  ): void {
+    this.rates.setDiscoveredContracts(contracts);
+  }
+
   async start(): Promise<void> {
     logger.info(
       {
         provider: this.opts.provider.name,
+        discoveredContracts:
+          this.opts.discoveredContracts?.map((c) => ({
+            group: c.group,
+            token: c.token,
+            symbol: c.contractSymbol,
+            month: c.contractMonth,
+            expiry: c.expiryDate,
+          })) ?? [],
       },
       "[engine] starting",
     );
@@ -103,6 +152,8 @@ export class MarketEngine {
     /*
      * Restore today's high/low and existing contract metadata
      * before receiving live ticks.
+     *
+     * ScripMaster metadata has already been supplied to RatesWriter.
      */
     await this.rates.init();
 
@@ -115,14 +166,6 @@ export class MarketEngine {
 
     /*
      * Subscribe to instruments selected by discovery.
-     *
-     * In AUTO mode these are the contracts returned by ScripMaster,
-     * e.g.:
-     *
-     * GOLD05OCT26FUT
-     * SILVER04SEP26FUT
-     *
-     * No contract is hardcoded here.
      */
     await this.opts.provider.subscribe(
       this.opts.instruments,
@@ -199,7 +242,7 @@ export class MarketEngine {
     }
 
     /*
-     * Normalize the provider-specific tick into our common Tick model.
+     * Normalize provider-specific tick into our common Tick model.
      */
     const tick = stampTick(
       normalizeTick(raw),
@@ -207,9 +250,6 @@ export class MarketEngine {
 
     /*
      * Ignore stale/replayed ticks.
-     *
-     * This is important after market close because Angel One can
-     * resend the previous contract's last traded price.
      */
     if (
       isStaleTick(
@@ -286,17 +326,10 @@ export class MarketEngine {
 
         try {
           /*
-           * IMPORTANT:
+           * RatesWriter receives the normalized tick.
            *
-           * RatesWriter receives the ORIGINAL normalized tick.
-           *
-           * RatesWriter determines:
-           *   GOLD/SILVER group
-           *   current contract symbol
-           *   contract month
-           *   expiry date
-           *
-           * from the live tick / discovered contract mapping.
+           * Contract metadata comes from ScripMaster discovery,
+           * NOT from the tick symbol.
            */
           this.rates.write(tick);
 
