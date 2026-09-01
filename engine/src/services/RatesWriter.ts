@@ -71,9 +71,16 @@ function parseContract(symbol: string): {
     return null;
   }
 
-  const day = Number(match[2]);
+  const dayStr = match[2];
   const monthCode = match[3];
-  const year = 2000 + Number(match[4]);
+  const yearStr = match[4];
+
+  if (dayStr === undefined || monthCode === undefined || yearStr === undefined) {
+    return null;
+  }
+
+  const day = Number(dayStr);
+  const year = 2000 + Number(yearStr);
 
   const monthName = MONTHS[monthCode];
 
