@@ -8,6 +8,12 @@ import {
   type MetalGroup,
 } from "./metals.js";
 import { currentSessionKey, sessionKeyFor } from "./session.js";
+import {
+  recordMappedTick,
+  recordMappingFailure,
+  recordWriteFailure,
+  recordWriteSuccess,
+} from "./feedDiagnostics.js";
 
 export interface ContractMetadata {
   group: MetalGroup;
@@ -295,7 +301,12 @@ export class RatesWriter {
   write(tick: Tick): void {
     const group = metalGroupForSymbol(tick.symbol);
 
-    if (!group) return;
+    if (!group) {
+      recordMappingFailure();
+      return;
+    }
+
+    recordMappedTick(group, tick.ltp, tick.receivedTs);
 
     const tsMs = tick.exchangeTs ?? tick.receivedTs;
     const key = sessionKeyFor(tsMs);
@@ -430,12 +441,14 @@ export class RatesWriter {
     this.dirty.clear();
 
     try {
+      let flushFailed = false;
+
       for (const group of groups) {
         const state = this.sessions.get(group);
 
         if (!state) continue;
 
-        const { error } = await getSupabase()
+        const { data, error } = await getSupabase()
           .from("rates")
           .update({
             mcx_ltp: state.mcx_ltp,
@@ -448,18 +461,21 @@ export class RatesWriter {
             contract_month: state.contract_month,
             expiry_date: state.expiry_date,
           })
-          .in(
-            "metal_type",
-            metalTypesForGroup(group) as string[],
-          );
+          .eq("metal_type", group)
+          .select("metal_type");
+
+        const affectedRows = data?.length ?? 0;
 
         if (error) {
           this.lastError = error.message;
+          flushFailed = true;
+          recordWriteFailure(group, error.message, affectedRows);
 
           logger.error(
             {
               err: error.message,
               group,
+              affectedRows,
             },
             "[rates] update failed",
           );
@@ -474,9 +490,25 @@ export class RatesWriter {
           continue;
         }
 
+        if (affectedRows === 0) {
+          const message = `no rates row matched metal_type=${group}`;
+          this.lastError = message;
+          flushFailed = true;
+          recordWriteFailure(group, message, affectedRows);
+          logger.error(
+            { group, affectedRows },
+            "[rates] update affected no rows",
+          );
+          this.dirty.add(group);
+          continue;
+        }
+
+        recordWriteSuccess(group, affectedRows);
+
         logger.debug(
           {
             group,
+            affectedRows,
             contract_symbol: state.contract_symbol,
             contract_month: state.contract_month,
             expiry_date: state.expiry_date,
@@ -484,9 +516,9 @@ export class RatesWriter {
           },
           "[rates] rate + contract metadata updated",
         );
-
-        this.lastError = null;
       }
+
+      if (!flushFailed) this.lastError = null;
     } catch (err) {
       this.lastError =
         err instanceof Error ? err.message : String(err);

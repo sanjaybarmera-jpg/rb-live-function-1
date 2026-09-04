@@ -3,6 +3,7 @@ import { logger } from "../utils/logger.js";
 import { getDiscoveryState } from "./discoveryState.js";
 import { getRolloverState, getTickConfirmationState } from "./rollover.js";
 import { scripMasterCacheAgeMs } from "../providers/angelone/scripMaster.js";
+import { getFeedDiagnostics } from "./feedDiagnostics.js";
 
 
 export interface HealthSnapshot {
@@ -37,6 +38,7 @@ export class HealthServer {
           discovery: { ...getDiscoveryState(), scripMasterCacheAgeMs: scripMasterCacheAgeMs() },
           rollover: getRolloverState(),
           tickConfirmation: getTickConfirmationState(),
+          feedDiagnostics: getFeedDiagnostics(),
         };
 
         res.writeHead(200, { "Content-Type": "application/json" });
