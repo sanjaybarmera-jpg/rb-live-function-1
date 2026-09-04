@@ -4,6 +4,7 @@ import { getSupabase } from "./supabase.js";
 import type { Tick } from "../models/Tick.js";
 import {
   metalGroupForSymbol,
+  metalTypesForGroup,
   type MetalGroup,
 } from "./metals.js";
 import { currentSessionKey, sessionKeyFor } from "./session.js";
