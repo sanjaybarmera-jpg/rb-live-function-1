@@ -150,6 +150,7 @@ function buildContractMonth(expiry: string): string {
 
   const mon = match[2];
   const year = match[3];
+  if (!mon) return "";
 
   const monthName = monthNames[mon];
   if (!monthName) return "";
@@ -186,6 +187,7 @@ function buildExpiryDate(expiry: string): string {
   const day = match;
   const mon = match[2];
   const year = match[3];
+  if (!mon) return "";
 
   const monthNumber = monthNumbers[mon];
   if (!monthNumber) return "";
