@@ -785,7 +785,9 @@ export class RatesWriter {
           {
             group,
             affectedRows,
-            updatedMetalTypes: data?.map((r) => (r as { metal_type: string }).metal_type),
+            updatedMetalTypes: (data as { metal_type: string }[] | null)?.map(
+              (r) => r.metal_type,
+            ),
             token: this.getDiscoveredContract(group)?.token,
             mcx_ltp: state.mcx_ltp,
             updated_at: state.updated_at,
