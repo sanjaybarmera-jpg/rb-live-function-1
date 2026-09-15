@@ -24,10 +24,17 @@ export interface EnvFallbackResult {
   goldToken: string | null;
   silverToken: string | null;
   issues: string[];
+  /** Non-empty comma entries seen across both variables (before validation). */
+  rawEntryCount: number;
 }
 
 function normalizeToken(raw: string): string {
   return raw.trim();
+}
+
+/** Angel One instrument tokens are always numeric strings, e.g. "466583". */
+function isAngelToken(token: string): boolean {
+  return /^\d+$/.test(token);
 }
 
 /**
@@ -49,18 +56,34 @@ export function buildEnvFallback(
 ): EnvFallbackResult {
   const issues: string[] = [];
   const mappings: Record<string, MetalGroup> = {};
+  let rawEntryCount = 0;
 
   // 1. METAL_TOKEN_MAP -> token => group
   for (const entry of (rawTokenMap ?? "").split(",")) {
     const trimmed = entry.trim();
     if (!trimmed) continue;
+    rawEntryCount++;
 
     const parts = trimmed.split(":").map((p) => p.trim());
     const token = normalizeToken(parts[0] ?? "");
     const group = (parts[1] ?? "").toLowerCase();
 
-    if (!token || (group !== "gold" && group !== "silver")) {
-      issues.push(`METAL_TOKEN_MAP entry "${trimmed}" is malformed — ignored`);
+    if (!token) {
+      issues.push(`METAL_TOKEN_MAP entry "${trimmed}" has no token — ignored`);
+      continue;
+    }
+
+    if (!isAngelToken(token)) {
+      issues.push(
+        `METAL_TOKEN_MAP entry "${trimmed}" token is not a numeric Angel token — ignored`,
+      );
+      continue;
+    }
+
+    if (group !== "gold" && group !== "silver") {
+      issues.push(
+        `METAL_TOKEN_MAP entry "${trimmed}" metal must be gold or silver — ignored`,
+      );
       continue;
     }
 
@@ -81,6 +104,7 @@ export function buildEnvFallback(
   for (const entry of (rawInstruments ?? "").split(",")) {
     const trimmed = entry.trim();
     if (!trimmed) continue;
+    rawEntryCount++;
 
     const parts = trimmed.split(":").map((p) => p.trim());
 
@@ -106,6 +130,13 @@ export function buildEnvFallback(
       continue;
     }
 
+    if (!isAngelToken(token)) {
+      issues.push(
+        `ANGEL_INSTRUMENTS entry "${trimmed}" token is not a numeric Angel token — ignored`,
+      );
+      continue;
+    }
+
     push(exchangeType, token);
   }
 
@@ -119,7 +150,14 @@ export function buildEnvFallback(
   const silverToken =
     Object.keys(mappings).find((t) => mappings[t] === "silver") ?? null;
 
-  return { instruments: ordered, mappings, goldToken, silverToken, issues };
+  return {
+    instruments: ordered,
+    mappings,
+    goldToken,
+    silverToken,
+    issues,
+    rawEntryCount,
+  };
 }
 
 /**
@@ -148,17 +186,25 @@ export function loadConfiguredInstruments(): Instrument[] {
       metalTokenMapConfigured: Boolean(
         (process.env["METAL_TOKEN_MAP"] ?? "").trim(),
       ),
+      rawEntryCount: result.rawEntryCount,
       parsedInstrumentCount: result.instruments.length,
       goldResolved: Boolean(result.goldToken),
       silverResolved: Boolean(result.silverToken),
+      goldToken: result.goldToken,
+      silverToken: result.silverToken,
       mappingFailures: result.issues.length,
+      mappingFailureReasons: result.issues,
     },
     "[env-fallback] instruments resolved from environment",
   );
 
   if (result.instruments.length === 0) {
     logger.error(
-      "[env-fallback] no instruments could be resolved — set ANGEL_INSTRUMENTS or METAL_TOKEN_MAP",
+      {
+        expectedAngelInstrumentsFormat: "5:466583,5:471725 (EXCHANGE:TOKEN) or 466583,471725",
+        expectedMetalTokenMapFormat: "466583:gold,471725:silver",
+      },
+      "[env-fallback] no instruments could be resolved — ScripMaster is unavailable and neither ANGEL_INSTRUMENTS nor METAL_TOKEN_MAP is set",
     );
   }
 

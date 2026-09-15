@@ -157,9 +157,20 @@ async function main(): Promise<void> {
   const silverToken =
     instruments.find((i) => groups[i.token] === "silver")?.token ?? null;
 
+  const discoverySource =
+    contracts.length > 0 ? "SCRIPMASTER" : "ENV_FALLBACK";
+
   logger.info(
     {
+      discoverySource,
+      angelInstrumentsConfigured: Boolean(env.ANGEL_INSTRUMENTS.trim()),
+      metalTokenMapConfigured: Boolean(env.METAL_TOKEN_MAP.trim()),
       subscriptionTokenCount: instruments.length,
+      subscriptionTokens: instruments.map((i) => i.token),
+      goldResolved: Boolean(goldToken),
+      silverResolved: Boolean(silverToken),
+      goldToken,
+      silverToken,
       goldTokenPresent: Boolean(goldToken),
       silverTokenPresent: Boolean(silverToken),
     },
@@ -168,7 +179,13 @@ async function main(): Promise<void> {
 
   if (instruments.length === 0) {
     logger.error(
-      "[boot] no instruments resolved — engine will connect but receive no ticks",
+      {
+        discoverySource,
+        recoveryIntervalMs: env.ROLLOVER_RECOVERY_INTERVAL_MS,
+        expectedAngelInstrumentsFormat: "5:466583,5:471725",
+        expectedMetalTokenMapFormat: "466583:gold,471725:silver",
+      },
+      "[boot] no instruments resolved — engine will retry ScripMaster discovery automatically until a contract is found",
     );
   }
 
@@ -210,6 +227,7 @@ async function main(): Promise<void> {
       provider: rolloverCapable as RolloverCapableProvider,
       enabled: env.ROLLOVER_ENABLED,
       intervalMs: env.ROLLOVER_CHECK_INTERVAL_MS,
+      recoveryIntervalMs: env.ROLLOVER_RECOVERY_INTERVAL_MS,
       tickConfirmTimeoutMs: env.ROLLOVER_TICK_CONFIRM_TIMEOUT_MS,
       onContractsChanged: (newContracts) => {
         const metadata: ContractMetadata[] = newContracts.map((c) => ({
@@ -229,7 +247,20 @@ async function main(): Promise<void> {
       },
     });
 
-    rollover.start(false);
+    /*
+     * Boot could not resolve a contract (ScripMaster outage, no ENV fallback):
+     * recover as soon as the network allows instead of waiting hours.
+     */
+    const needsRecovery = contracts.length === 0;
+
+    if (needsRecovery) {
+      logger.warn(
+        { recoveryIntervalMs: env.ROLLOVER_RECOVERY_INTERVAL_MS },
+        "[boot] no active contract — discovery recovery loop enabled",
+      );
+    }
+
+    rollover.start(needsRecovery);
   }
 
   let shuttingDown = false;

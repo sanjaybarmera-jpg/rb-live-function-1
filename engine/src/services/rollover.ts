@@ -128,6 +128,13 @@ export interface RolloverOptions {
   enabled: boolean;
   intervalMs: number;
 
+  /**
+   * Short interval used while NO contract is active (ScripMaster was
+   * unavailable at boot). Lets the engine recover a live feed in minutes
+   * instead of waiting a full rollover cycle. Omit to always use intervalMs.
+   */
+  recoveryIntervalMs?: number;
+
   /** Tick confirmation timeout in ms. 0 / omitted disables confirmation. */
   tickConfirmTimeoutMs?: number;
 
@@ -151,22 +158,48 @@ export class RolloverService {
     state.intervalMs = opts.intervalMs;
   }
 
+  /** Recovery pace while the engine has no active contract at all. */
+  private currentIntervalMs(): number {
+    const recovery = this.opts.recoveryIntervalMs;
+    if (recovery && recovery > 0 && state.currentContracts.length === 0) {
+      return recovery;
+    }
+    return this.opts.intervalMs;
+  }
+
+  private schedule(): void {
+    const delay = this.currentIntervalMs();
+    state.intervalMs = delay;
+    state.nextCheckTime = new Date(Date.now() + delay).toISOString();
+
+    this.timer = setTimeout(() => {
+      void this.check().finally(() => this.schedule());
+    }, delay);
+
+    this.timer.unref?.();
+  }
+
   /** Starts the periodic checker. Optionally runs one check immediately. */
   start(runImmediately = true): void {
     if (!this.opts.enabled) {
       logger.info("[rollover] disabled — contract switching will not run");
       return;
     }
-    this.timer = setInterval(() => void this.check(), this.opts.intervalMs);
-    this.timer.unref?.();
-    state.nextCheckTime = new Date(Date.now() + this.opts.intervalMs).toISOString();
-    logger.info({ intervalMs: this.opts.intervalMs }, "[rollover] scheduler started");
+    this.schedule();
+    logger.info(
+      {
+        intervalMs: this.opts.intervalMs,
+        recoveryIntervalMs: this.opts.recoveryIntervalMs ?? null,
+        hasActiveContracts: state.currentContracts.length > 0,
+      },
+      "[rollover] scheduler started",
+    );
     if (runImmediately) void this.check();
   }
 
   stop(): void {
     if (this.timer) {
-      clearInterval(this.timer);
+      clearTimeout(this.timer);
       this.timer = null;
     }
     state.nextCheckTime = null;
@@ -184,7 +217,7 @@ export class RolloverService {
     }
     this.running = true;
     state.lastCheckTime = new Date().toISOString();
-    state.nextCheckTime = new Date(Date.now() + this.opts.intervalMs).toISOString();
+    state.nextCheckTime = new Date(Date.now() + this.currentIntervalMs()).toISOString();
     logger.info("[rollover] checking contracts");
 
     try {
