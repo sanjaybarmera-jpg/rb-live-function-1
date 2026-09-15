@@ -24,10 +24,17 @@ export interface EnvFallbackResult {
   goldToken: string | null;
   silverToken: string | null;
   issues: string[];
+  /** Non-empty comma entries seen across both variables (before validation). */
+  rawEntryCount: number;
 }
 
 function normalizeToken(raw: string): string {
   return raw.trim();
+}
+
+/** Angel One instrument tokens are always numeric strings, e.g. "466583". */
+function isAngelToken(token: string): boolean {
+  return /^\d+$/.test(token);
 }
 
 /**
