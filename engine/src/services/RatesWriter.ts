@@ -265,9 +265,20 @@ export class RatesWriter {
           discovered?.contractMonth ??
           String(data.contract_month ?? "");
 
+        /*
+         * expiry_date must ALWAYS be a strict ISO date.
+         *
+         * A DB row may still contain a value persisted by an
+         * older engine version (raw ScripMaster text appended
+         * to an ISO prefix). Never trust it: accept strict ISO,
+         * otherwise re-parse from the contract symbol.
+         */
         const expiryDate =
           discovered?.expiryDate ??
-          String(data.expiry_date ?? "");
+          sanitizeExpiryDate(
+            String(data.expiry_date ?? ""),
+            contractSymbol,
+          );
 
         this.sessions.set(group, {
           group,
