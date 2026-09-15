@@ -9,6 +9,10 @@ import {
 
 import { setDiscoveryState } from "./services/discoveryState.js";
 import { setTokenGroup } from "./services/metals.js";
+import {
+  buildContractMonth,
+  normalizeExpiryDate,
+} from "./utils/expiry.js";
 
 import {
   RolloverService,
