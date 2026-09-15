@@ -8,6 +8,7 @@ import {
   type MetalGroup,
 } from "./metals.js";
 import { currentSessionKey, sessionKeyFor } from "./session.js";
+import { sanitizeExpiryDate } from "../utils/expiry.js";
 import {
   recordMappingFailure,
   recordTick,
