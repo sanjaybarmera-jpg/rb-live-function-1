@@ -742,59 +742,57 @@ export class RatesWriter {
 
 
         if (error) {
-          this.lastError =
-            error.message;
+          this.lastError = error.message;
+          recordWriteFailure(group, error.message);
 
           logger.error(
             {
-              err:
-                error.message,
-
+              err: error.message,
               group,
-
-              contract_symbol:
-                state.contract_symbol,
-
-              contract_month:
-                state.contract_month,
-
-              expiry_date:
-                state.expiry_date,
+              where: `metal_type IN (${targets.join(", ")})`,
             },
             "[rates] update failed",
           );
 
-          /*
-           * Retry next cycle.
-           */
           this.dirty.add(group);
-
           continue;
         }
 
-        logger.debug(
+        const affectedRows = data?.length ?? 0;
+
+        if (affectedRows === 0) {
+          const reason = `update matched 0 rows for metal_type IN (${targets.join(", ")}) — no such rows in rates, or RLS/service-role key blocking the update`;
+
+          this.lastError = reason;
+          recordZeroRowUpdate(group, reason);
+
+          logger.error(
+            {
+              group,
+              where: `metal_type IN (${targets.join(", ")})`,
+              affectedRows: 0,
+            },
+            "[rates] update affected 0 rows — treating as FAILURE",
+          );
+
+          this.dirty.add(group);
+          continue;
+        }
+
+        recordWriteSuccess(group, affectedRows);
+
+        logger.info(
           {
             group,
-
-            token:
-              this.getDiscoveredContract(
-                group,
-              )?.token,
-
-            contract_symbol:
-              state.contract_symbol,
-
-            contract_month:
-              state.contract_month,
-
-            expiry_date:
-              state.expiry_date,
-
-            mcx_ltp:
-              state.mcx_ltp,
+            affectedRows,
+            updatedMetalTypes: data?.map((r) => (r as { metal_type: string }).metal_type),
+            token: this.getDiscoveredContract(group)?.token,
+            mcx_ltp: state.mcx_ltp,
+            updated_at: state.updated_at,
           },
-          "[rates] rate + contract metadata updated",
+          "[rates] supabase update succeeded",
         );
+
 
         this.lastError =
           null;
