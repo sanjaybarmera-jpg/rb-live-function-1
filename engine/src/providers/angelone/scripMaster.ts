@@ -267,7 +267,9 @@ export async function loadMcxFutures(
   opts: ScripMasterOptions = {},
 ): Promise<ScripInstrument[]> {
   const ttlMs = opts.ttlMs ?? 6 * 60 * 60 * 1000;
-  const timeoutMs = opts.timeoutMs ?? 180_000;
+  // Bounded per-attempt timeout: three attempts must not stall boot for
+  // nine minutes when the network is unreachable.
+  const timeoutMs = opts.timeoutMs ?? 60_000;
 
   // 1. In-memory cache
   if (
@@ -308,8 +310,9 @@ export async function loadMcxFutures(
 
   logger.info(
     {
-      url: SCRIP_MASTER_URL,
+      url: scripMasterUrl(),
       timeoutMs,
+      attempts: DOWNLOAD_ATTEMPTS,
     },
     "[scripmaster] ScripMaster download started",
   );
@@ -348,7 +351,7 @@ export async function loadMcxFutures(
       {
         total: rawRows.length,
         mcxFutures: instruments.length,
-        cacheFile: CACHE_FILE,
+        cacheFile: cacheFile(),
       },
       "[scripmaster] ScripMaster cache updated",
     );
