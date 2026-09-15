@@ -10,6 +10,10 @@ import {
   scripMasterCacheAgeMs,
   type ScripInstrument,
 } from "./scripMaster.js";
+import {
+  normalizeExpiryDate,
+  expiryFromContractSymbol,
+} from "../../utils/expiry.js";
 
 /** Default exchange for MCX bullion futures when an entry omits it. */
 const DEFAULT_EXCHANGE_TYPE = 5;
@@ -376,4 +380,44 @@ export async function discoverInstruments(): Promise<DiscoveryResult> {
 
     discoveredAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Contract safety validation used before any rollover switch.
+ *
+ * A contract is only accepted when it has a usable Angel token, a valid
+ * metal group, a contract symbol, a real calendar expiry date, and that
+ * expiry is still in the future.
+ */
+export function validateContract(
+  contract: {
+    group?: string;
+    token?: string;
+    symbol?: string;
+    expiry?: string;
+  },
+  now: number = Date.now(),
+): { ok: boolean; reason?: string; expiryDate?: string } {
+  const token = String(contract.token ?? "").trim();
+  if (!token) return { ok: false, reason: "missing token" };
+  if (!/^\d+$/.test(token)) return { ok: false, reason: "token is not a valid Angel numeric token" };
+
+  if (contract.group !== "gold" && contract.group !== "silver") {
+    return { ok: false, reason: "unknown metal group" };
+  }
+
+  const symbol = String(contract.symbol ?? "").trim();
+  if (!symbol) return { ok: false, reason: "missing contract symbol" };
+
+  const expiryDate =
+    normalizeExpiryDate(String(contract.expiry ?? "")) ||
+    expiryFromContractSymbol(symbol);
+
+  if (!expiryDate) return { ok: false, reason: "invalid expiry date" };
+
+  const expiryMs = Date.parse(`${expiryDate}T23:59:59.999Z`);
+  if (!Number.isFinite(expiryMs)) return { ok: false, reason: "invalid expiry date" };
+  if (expiryMs <= now) return { ok: false, reason: "contract already expired" };
+
+  return { ok: true, expiryDate };
 }

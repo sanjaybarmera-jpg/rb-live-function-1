@@ -17,6 +17,7 @@ import {
 import {
   RolloverService,
   setActiveContracts,
+  setEnvFallbackTokens,
   toActive,
   type ActiveContract,
   type RolloverCapableProvider,
@@ -188,6 +189,13 @@ async function main(): Promise<void> {
 
   // Seed rollover state
   setActiveContracts(contracts);
+
+  // ScripMaster was unavailable at boot: remember the ENV tokens so the first
+  // successful discovery can drop them instead of leaving two tokens mapped
+  // to the same metal.
+  if (contracts.length === 0) {
+    setEnvFallbackTokens(instruments.map((i) => i.token));
+  }
 
   const rolloverCapable = provider as unknown as Partial<RolloverCapableProvider>;
   let rollover: RolloverService | null = null;
