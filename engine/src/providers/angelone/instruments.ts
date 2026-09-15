@@ -1,4 +1,4 @@
-import { loadEnv, parseInstruments } from "../../config/env.js";
+import { loadEnv } from "../../config/env.js";
 import type { Instrument } from "../types.js";
 import { logger } from "../../utils/logger.js";
 import {
