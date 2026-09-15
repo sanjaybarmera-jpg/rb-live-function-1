@@ -40,9 +40,51 @@ interface SessionState {
   expiry_date: string;
 }
 
-const FLUSH_INTERVAL_MS = 250;
+/**
+ * Coalescing window before a Supabase write is issued.
+ *
+ * Chosen from the measured architecture, not arbitrarily:
+ * a Supabase UPDATE round-trip is ~100-300ms and only ONE write per metal
+ * may be in flight, so the natural write pacing is the round-trip itself.
+ * The window therefore only has to absorb ticks that arrive inside the same
+ * event-loop burst (Angel delivers several frames per socket read). 25ms is
+ * far below the round-trip, so it adds no perceptible latency, while still
+ * collapsing a burst of frames into a single write.
+ */
+const COALESCE_MS = 25;
+
+/** Safety-net sweep: retries groups left dirty by a failed write. */
+const RETRY_SWEEP_MS = 1000;
+
+/** Backoff bounds applied after a failed write (per metal). */
+const RETRY_BASE_MS = 250;
+const RETRY_MAX_MS = 5000;
+
+interface UpdateResult {
+  data: { metal_type: string }[] | null;
+  error: { message: string } | null;
+}
+
+/** Minimal shape of the Supabase update chain (injectable for tests). */
+export interface RatesDbClient {
+  from(table: string): {
+    update(payload: Record<string, unknown>): {
+      in(
+        column: string,
+        values: string[],
+      ): { select(columns: string): PromiseLike<UpdateResult> };
+    };
+  };
+}
+
+interface GroupWriteState {
+  inFlight: boolean;
+  timer: NodeJS.Timeout | null;
+  retryDelayMs: number;
+}
 
 const GROUPS: MetalGroup[] = ["gold", "silver"];
+
 
 /**
  * RatesWriter
