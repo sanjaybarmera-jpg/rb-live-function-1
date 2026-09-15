@@ -217,7 +217,7 @@ export class RolloverService {
     }
     this.running = true;
     state.lastCheckTime = new Date().toISOString();
-    state.nextCheckTime = new Date(Date.now() + this.opts.intervalMs).toISOString();
+    state.nextCheckTime = new Date(Date.now() + this.currentIntervalMs()).toISOString();
     logger.info("[rollover] checking contracts");
 
     try {
