@@ -8,6 +8,14 @@ import {
   type MetalGroup,
 } from "./metals.js";
 import { currentSessionKey, sessionKeyFor } from "./session.js";
+import {
+  recordMappingFailure,
+  recordTick,
+  recordWriteAttempt,
+  recordWriteFailure,
+  recordWriteSuccess,
+  recordZeroRowUpdate,
+} from "./feedDiagnostics.js";
 
 export interface ContractMetadata {
   group: MetalGroup;
