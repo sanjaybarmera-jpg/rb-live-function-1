@@ -8,7 +8,7 @@ import {
 } from "./providers/angelone/instruments.js";
 
 import { setDiscoveryState } from "./services/discoveryState.js";
-import { setTokenGroup } from "./services/metals.js";
+import { setTokenGroup, getTokenGroups } from "./services/metals.js";
 import {
   buildContractMonth,
   normalizeExpiryDate,
@@ -150,11 +150,27 @@ async function main(): Promise<void> {
     env.INSTRUMENT_DISCOVERY,
   );
 
+  const groups = getTokenGroups();
+  const goldToken =
+    instruments.find((i) => groups[i.token] === "gold")?.token ?? null;
+  const silverToken =
+    instruments.find((i) => groups[i.token] === "silver")?.token ?? null;
+
+  logger.info(
+    {
+      subscriptionTokenCount: instruments.length,
+      goldTokenPresent: Boolean(goldToken),
+      silverTokenPresent: Boolean(silverToken),
+    },
+    "[boot] final subscription list prepared",
+  );
+
   if (instruments.length === 0) {
-    logger.warn(
+    logger.error(
       "[boot] no instruments resolved — engine will connect but receive no ticks",
     );
   }
+
 
   const engine = new MarketEngine({
     provider,
