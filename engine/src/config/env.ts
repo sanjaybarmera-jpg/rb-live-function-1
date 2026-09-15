@@ -43,6 +43,17 @@ const schema = z.object({
     .int()
     .positive()
     .default(6 * 60 * 60 * 1000),
+  /**
+   * Faster retry used while NO contract is active (ScripMaster unreachable at
+   * boot), so the feed recovers without a redeploy. Default 2 minutes.
+   */
+  ROLLOVER_RECOVERY_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(2 * 60 * 1000),
+  /** Token -> metal map used as ENV fallback, e.g. "466583:gold,471725:silver". */
+  METAL_TOKEN_MAP: z.string().default(""),
   /** How long to wait for the first valid tick on a new contract (ms). */
   ROLLOVER_TICK_CONFIRM_TIMEOUT_MS: z.coerce
     .number()
