@@ -186,17 +186,25 @@ export function loadConfiguredInstruments(): Instrument[] {
       metalTokenMapConfigured: Boolean(
         (process.env["METAL_TOKEN_MAP"] ?? "").trim(),
       ),
+      rawEntryCount: result.rawEntryCount,
       parsedInstrumentCount: result.instruments.length,
       goldResolved: Boolean(result.goldToken),
       silverResolved: Boolean(result.silverToken),
+      goldToken: result.goldToken,
+      silverToken: result.silverToken,
       mappingFailures: result.issues.length,
+      mappingFailureReasons: result.issues,
     },
     "[env-fallback] instruments resolved from environment",
   );
 
   if (result.instruments.length === 0) {
     logger.error(
-      "[env-fallback] no instruments could be resolved — set ANGEL_INSTRUMENTS or METAL_TOKEN_MAP",
+      {
+        expectedAngelInstrumentsFormat: "5:466583,5:471725 (EXCHANGE:TOKEN) or 466583,471725",
+        expectedMetalTokenMapFormat: "466583:gold,471725:silver",
+      },
+      "[env-fallback] no instruments could be resolved — ScripMaster is unavailable and neither ANGEL_INSTRUMENTS nor METAL_TOKEN_MAP is set",
     );
   }
 
