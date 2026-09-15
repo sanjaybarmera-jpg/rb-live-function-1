@@ -112,16 +112,59 @@ export class RatesWriter {
 
   private timer: NodeJS.Timeout | null = null;
 
-  private flushing = false;
+  /** Per-metal write state — Gold and Silver never block each other. */
+  private writes = new Map<MetalGroup, GroupWriteState>();
 
   private lastError: string | null = null;
 
   private initialized = false;
 
   constructor(
-    private flushIntervalMs: number = FLUSH_INTERVAL_MS,
+    private coalesceMs: number = COALESCE_MS,
     private discoveredContracts: ContractMetadata[] = [],
+    private db: () => RatesDbClient = () =>
+      getSupabase() as unknown as RatesDbClient,
   ) {}
+
+  private writeStateFor(group: MetalGroup): GroupWriteState {
+    let w = this.writes.get(group);
+    if (!w) {
+      w = { inFlight: false, timer: null, retryDelayMs: 0 };
+      this.writes.set(group, w);
+    }
+    return w;
+  }
+
+  /** Mark a metal dirty and schedule its independent low-latency write. */
+  private markDirty(group: MetalGroup): void {
+    this.dirty.add(group);
+    this.scheduleFlush(group);
+  }
+
+  private scheduleFlush(group: MetalGroup, delayMs?: number): void {
+    const w = this.writeStateFor(group);
+
+    // A write is already running: the latest value stays in memory and is
+    // written as soon as that write completes. No concurrent writes.
+    if (w.inFlight) {
+      setPendingLatestTick(group, true);
+      return;
+    }
+
+    if (w.timer) return;
+
+    const delay = delayMs ?? w.retryDelayMs ?? 0;
+
+    w.timer = setTimeout(
+      () => {
+        w.timer = null;
+        void this.flushGroup(group);
+      },
+      Math.max(delay, this.coalesceMs),
+    );
+
+    w.timer.unref?.();
+  }
 
   /**
    * Replace currently discovered contracts.
