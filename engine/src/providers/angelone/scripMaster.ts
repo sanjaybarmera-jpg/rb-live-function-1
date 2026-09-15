@@ -109,15 +109,16 @@ function project(row: RawScrip): ScripInstrument | null {
   };
 }
 
-async function loadDiskCache(): Promise<CacheEntry | null> {
+async function readCacheFrom(dir: string): Promise<CacheEntry | null> {
   try {
-    const raw = await fs.readFile(CACHE_FILE, "utf8");
+    const raw = await fs.readFile(cacheFile(dir), "utf8");
     const parsed = JSON.parse(raw) as CacheEntry;
 
     if (
       !parsed ||
       !Number.isFinite(parsed.fetchedAt) ||
-      !Array.isArray(parsed.instruments)
+      !Array.isArray(parsed.instruments) ||
+      parsed.instruments.length === 0
     ) {
       return null;
     }
@@ -126,6 +127,7 @@ async function loadDiskCache(): Promise<CacheEntry | null> {
       {
         count: parsed.instruments.length,
         ageMs: Date.now() - parsed.fetchedAt,
+        cacheDir: dir,
       },
       "[scripmaster] persistent cache loaded",
     );
@@ -136,24 +138,48 @@ async function loadDiskCache(): Promise<CacheEntry | null> {
   }
 }
 
-async function saveDiskCache(entry: CacheEntry): Promise<void> {
-  await fs.mkdir(CACHE_DIR, { recursive: true });
-
-  const tmpFile = `${CACHE_FILE}.tmp`;
-
-  await fs.writeFile(
-    tmpFile,
-    JSON.stringify(entry),
-    "utf8",
+async function loadDiskCache(): Promise<CacheEntry | null> {
+  // Try the configured directory first, then the writable temp fallback.
+  return (
+    (await readCacheFrom(PRIMARY_CACHE_DIR)) ??
+    (await readCacheFrom(FALLBACK_CACHE_DIR))
   );
-
-  await fs.rename(tmpFile, CACHE_FILE);
 }
 
-async function downloadScripMaster(
-  timeoutMs: number,
-): Promise<RawScrip[]> {
+async function writeCacheTo(dir: string, entry: CacheEntry): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+
+  const target = cacheFile(dir);
+  const tmpFile = `${target}.tmp`;
+
+  await fs.writeFile(tmpFile, JSON.stringify(entry), "utf8");
+  await fs.rename(tmpFile, target);
+}
+
+async function saveDiskCache(entry: CacheEntry): Promise<void> {
+  try {
+    await writeCacheTo(PRIMARY_CACHE_DIR, entry);
+    cacheDir = PRIMARY_CACHE_DIR;
+  } catch (err) {
+    // Read-only image directory — fall back to the temp dir instead of
+    // losing the cache entirely.
+    logger.warn(
+      {
+        err: err instanceof Error ? err.message : String(err),
+        cacheDir: PRIMARY_CACHE_DIR,
+        fallbackDir: FALLBACK_CACHE_DIR,
+      },
+      "[scripmaster] primary cache directory not writable — using temp directory",
+    );
+
+    await writeCacheTo(FALLBACK_CACHE_DIR, entry);
+    cacheDir = FALLBACK_CACHE_DIR;
+  }
+}
+
+async function requestScripMaster(timeoutMs: number): Promise<RawScrip[]> {
   const started = Date.now();
+  const url = scripMasterUrl();
 
   /*
    * IMPORTANT:
@@ -163,12 +189,13 @@ async function downloadScripMaster(
    * Streaming the response avoids Axios aborting while parsing
    * the complete JSON payload.
    */
-  const response = await axios.get<unknown>(SCRIP_MASTER_URL, {
-    timeout: Math.max(timeoutMs, 180_000),
+  const response = await axios.get<unknown>(url, {
+    timeout: timeoutMs,
     responseType: "text",
     maxContentLength: 200 * 1024 * 1024,
     maxBodyLength: 200 * 1024 * 1024,
     decompress: true,
+    httpsAgent: httpsAgent(),
     headers: {
       Accept: "application/json",
       "Accept-Encoding": "gzip, deflate",
@@ -196,6 +223,44 @@ async function downloadScripMaster(
   );
 
   return raw as RawScrip[];
+}
+
+/**
+ * Downloads ScripMaster with bounded retries. A transient network error
+ * (ETIMEDOUT / ENETUNREACH / DNS) must not permanently strand the engine
+ * without instruments.
+ */
+async function downloadScripMaster(timeoutMs: number): Promise<RawScrip[]> {
+  let lastErr: unknown;
+
+  for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
+    try {
+      return await requestScripMaster(timeoutMs);
+    } catch (err) {
+      lastErr = err;
+
+      const code =
+        typeof err === "object" && err !== null && "code" in err
+          ? String((err as { code?: unknown }).code)
+          : undefined;
+
+      logger.warn(
+        {
+          attempt,
+          attempts: DOWNLOAD_ATTEMPTS,
+          code,
+          err: err instanceof Error ? err.message : String(err),
+        },
+        "[scripmaster] download attempt failed",
+      );
+
+      if (attempt < DOWNLOAD_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, attempt * 3000));
+      }
+    }
+  }
+
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 export async function loadMcxFutures(
