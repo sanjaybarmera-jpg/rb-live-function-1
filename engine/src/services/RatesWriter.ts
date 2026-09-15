@@ -8,6 +8,14 @@ import {
   type MetalGroup,
 } from "./metals.js";
 import { currentSessionKey, sessionKeyFor } from "./session.js";
+import {
+  recordMappingFailure,
+  recordTick,
+  recordWriteAttempt,
+  recordWriteFailure,
+  recordWriteSuccess,
+  recordZeroRowUpdate,
+} from "./feedDiagnostics.js";
 
 export interface ContractMetadata {
   group: MetalGroup;
@@ -409,7 +417,10 @@ export class RatesWriter {
     const group =
       metalGroupForSymbol(tick.symbol);
 
-    if (!group) return;
+    if (!group) {
+      recordMappingFailure(tick.symbol);
+      return;
+    }
 
     const tsMs =
       tick.exchangeTs ??
@@ -420,6 +431,9 @@ export class RatesWriter {
 
     const ts =
       toIso(tsMs);
+
+    recordTick(group, tick.symbol, tick.ltp, ts);
+
 
     let state =
       this.sessions.get(group);
@@ -669,137 +683,118 @@ export class RatesWriter {
          *
          * Never send blank expiry_date to PostgreSQL.
          */
-        if (
-          !state.expiry_date ||
-          !/^\d{4}-\d{2}-\d{2}$/.test(
-            state.expiry_date,
-          )
-        ) {
+        const metadataValid =
+          !!state.contract_symbol &&
+          !!state.expiry_date &&
+          /^\d{4}-\d{2}-\d{2}$/.test(state.expiry_date);
+
+        if (!metadataValid) {
+          /*
+           * Contract metadata is unusable, but the LIVE PRICE must
+           * still reach Supabase. We write price fields only and
+           * leave existing contract metadata untouched.
+           */
           logger.error(
             {
               group,
-
-              contract_symbol:
-                state.contract_symbol,
-
-              contract_month:
-                state.contract_month,
-
-              expiry_date:
-                state.expiry_date,
+              contract_symbol: state.contract_symbol,
+              contract_month: state.contract_month,
+              expiry_date: state.expiry_date,
             },
-            "[rates] refusing DB update because expiry_date is invalid",
+            "[rates] contract metadata invalid — writing price fields only",
           );
-
-          this.dirty.add(group);
-
-          continue;
         }
 
-        /*
-         * Also prevent blank contract_symbol.
-         */
-        if (!state.contract_symbol) {
-          logger.error(
-            {
-              group,
-              expiry_date:
-                state.expiry_date,
-            },
-            "[rates] refusing DB update because contract_symbol is empty",
-          );
+        const payload: Record<string, unknown> = {
+          mcx_ltp: state.mcx_ltp,
+          high: state.high,
+          low: state.low,
+          updated_at: state.updated_at,
+        };
 
-          this.dirty.add(group);
-
-          continue;
+        if (metadataValid) {
+          payload["contract_symbol"] = state.contract_symbol;
+          payload["contract_month"] = state.contract_month;
+          payload["expiry_date"] = state.expiry_date;
         }
 
-        const { error } =
+        const targets = metalTypesForGroup(group) as string[];
+
+        recordWriteAttempt(group);
+
+        logger.info(
+          {
+            group,
+            token: this.getDiscoveredContract(group)?.token,
+            mcx_ltp: state.mcx_ltp,
+            where: `metal_type IN (${targets.join(", ")})`,
+            metadataValid,
+          },
+          "[rates] supabase update attempt",
+        );
+
+        const { data, error } =
           await getSupabase()
             .from("rates")
-            .update({
-              mcx_ltp:
-                state.mcx_ltp,
+            .update(payload)
+            .in("metal_type", targets)
+            .select("metal_type");
 
-              high:
-                state.high,
-
-              low:
-                state.low,
-
-              updated_at:
-                state.updated_at,
-
-              contract_symbol:
-                state.contract_symbol,
-
-              contract_month:
-                state.contract_month,
-
-              expiry_date:
-                state.expiry_date,
-            })
-            .in(
-              "metal_type",
-              metalTypesForGroup(
-                group,
-              ) as string[],
-            );
 
         if (error) {
-          this.lastError =
-            error.message;
+          this.lastError = error.message;
+          recordWriteFailure(group, error.message);
 
           logger.error(
             {
-              err:
-                error.message,
-
+              err: error.message,
               group,
-
-              contract_symbol:
-                state.contract_symbol,
-
-              contract_month:
-                state.contract_month,
-
-              expiry_date:
-                state.expiry_date,
+              where: `metal_type IN (${targets.join(", ")})`,
             },
             "[rates] update failed",
           );
 
-          /*
-           * Retry next cycle.
-           */
           this.dirty.add(group);
-
           continue;
         }
 
-        logger.debug(
+        const affectedRows = data?.length ?? 0;
+
+        if (affectedRows === 0) {
+          const reason = `update matched 0 rows for metal_type IN (${targets.join(", ")}) — no such rows in rates, or RLS/service-role key blocking the update`;
+
+          this.lastError = reason;
+          recordZeroRowUpdate(group, reason);
+
+          logger.error(
+            {
+              group,
+              where: `metal_type IN (${targets.join(", ")})`,
+              affectedRows: 0,
+            },
+            "[rates] update affected 0 rows — treating as FAILURE",
+          );
+
+          this.dirty.add(group);
+          continue;
+        }
+
+        recordWriteSuccess(group, affectedRows);
+
+        logger.info(
           {
             group,
-
-            token:
-              this.getDiscoveredContract(
-                group,
-              )?.token,
-
-            contract_symbol:
-              state.contract_symbol,
-
-            contract_month:
-              state.contract_month,
-
-            expiry_date:
-              state.expiry_date,
-
-            mcx_ltp:
-              state.mcx_ltp,
+            affectedRows,
+            updatedMetalTypes: (data as { metal_type: string }[] | null)?.map(
+              (r) => r.metal_type,
+            ),
+            token: this.getDiscoveredContract(group)?.token,
+            mcx_ltp: state.mcx_ltp,
+            updated_at: state.updated_at,
           },
-          "[rates] rate + contract metadata updated",
+          "[rates] supabase update succeeded",
         );
+
 
         this.lastError =
           null;

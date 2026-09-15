@@ -3,6 +3,8 @@ import { logger } from "../utils/logger.js";
 import { getDiscoveryState } from "./discoveryState.js";
 import { getRolloverState, getTickConfirmationState } from "./rollover.js";
 import { scripMasterCacheAgeMs } from "../providers/angelone/scripMaster.js";
+import { getFeedDiagnostics } from "./feedDiagnostics.js";
+import { getTokenGroups } from "./metals.js";
 
 
 export interface HealthSnapshot {
@@ -37,6 +39,19 @@ export class HealthServer {
           discovery: { ...getDiscoveryState(), scripMasterCacheAgeMs: scripMasterCacheAgeMs() },
           rollover: getRolloverState(),
           tickConfirmation: getTickConfirmationState(),
+          tokenMap: getTokenGroups(),
+          supabase: {
+            urlConfigured: Boolean(process.env["SUPABASE_URL"]),
+            serviceRoleKeyConfigured: Boolean(process.env["SUPABASE_SERVICE_ROLE_KEY"]),
+            urlHost: (() => {
+              try {
+                return new URL(process.env["SUPABASE_URL"] ?? "").host;
+              } catch {
+                return null;
+              }
+            })(),
+          },
+          feed: getFeedDiagnostics(),
         };
 
         res.writeHead(200, { "Content-Type": "application/json" });

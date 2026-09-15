@@ -184,10 +184,10 @@ function buildExpiryDate(expiry: string): string {
     DEC: "12",
   };
 
-  const day = match;
+  const day = match[1];
   const mon = match[2];
   const year = match[3];
-  if (!mon) return "";
+  if (!day || !mon || !year) return "";
 
   const monthNumber = monthNumbers[mon];
   if (!monthNumber) return "";
