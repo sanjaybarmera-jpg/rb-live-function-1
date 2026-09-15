@@ -417,7 +417,10 @@ export class RatesWriter {
     const group =
       metalGroupForSymbol(tick.symbol);
 
-    if (!group) return;
+    if (!group) {
+      recordMappingFailure(tick.symbol);
+      return;
+    }
 
     const tsMs =
       tick.exchangeTs ??
@@ -428,6 +431,9 @@ export class RatesWriter {
 
     const ts =
       toIso(tsMs);
+
+    recordTick(group, tick.symbol, tick.ltp, ts);
+
 
     let state =
       this.sessions.get(group);
