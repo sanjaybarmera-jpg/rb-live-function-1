@@ -9,6 +9,10 @@ import {
 
 import { setDiscoveryState } from "./services/discoveryState.js";
 import { setTokenGroup } from "./services/metals.js";
+import {
+  buildContractMonth,
+  normalizeExpiryDate,
+} from "./utils/expiry.js";
 
 import {
   RolloverService,
@@ -123,76 +127,13 @@ async function resolveInstruments(
 }
 
 /**
- * Convert Angel One expiry (e.g. 05OCT2026) into "October 2026"
- */
-function buildContractMonth(expiry: string): string {
-  const normalized = expiry.trim().toUpperCase();
-  const match = /^(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{4})$/.exec(
-    normalized,
-  );
-
-  if (!match) return "";
-
-  const monthNames: Record<string, string> = {
-    JAN: "January",
-    FEB: "February",
-    MAR: "March",
-    APR: "April",
-    MAY: "May",
-    JUN: "June",
-    JUL: "July",
-    AUG: "August",
-    SEP: "September",
-    OCT: "October",
-    NOV: "November",
-    DEC: "December",
-  };
-
-  const mon = match[2];
-  const year = match[3];
-  if (!mon) return "";
-
-  const monthName = monthNames[mon];
-  if (!monthName) return "";
-
-  return `${monthName} ${year}`;
-}
-
-/**
- * Convert Angel One expiry (e.g. 05OCT2026) into "2026-10-05"
+ * Convert Angel One expiry (e.g. 05OCT2026) into "2026-10-05".
+ *
+ * Delegates to the shared normalizer so no code path can ever
+ * concatenate raw ScripMaster text into expiry_date.
  */
 function buildExpiryDate(expiry: string): string {
-  const normalized = expiry.trim().toUpperCase();
-  const match = /^(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{4})$/.exec(
-    normalized,
-  );
-
-  if (!match) return "";
-
-  const monthNumbers: Record<string, string> = {
-    JAN: "01",
-    FEB: "02",
-    MAR: "03",
-    APR: "04",
-    MAY: "05",
-    JUN: "06",
-    JUL: "07",
-    AUG: "08",
-    SEP: "09",
-    OCT: "10",
-    NOV: "11",
-    DEC: "12",
-  };
-
-  const day = match[1];
-  const mon = match[2];
-  const year = match[3];
-  if (!day || !mon || !year) return "";
-
-  const monthNumber = monthNumbers[mon];
-  if (!monthNumber) return "";
-
-  return `${year}-${monthNumber}-${day}`;
+  return normalizeExpiryDate(expiry);
 }
 
 async function main(): Promise<void> {
