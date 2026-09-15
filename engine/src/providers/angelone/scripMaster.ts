@@ -1,18 +1,55 @@
 import axios from "axios";
+import https from "node:https";
 import { logger } from "../../utils/logger.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 
-const SCRIP_MASTER_URL =
+const DEFAULT_SCRIP_MASTER_URL =
   "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json";
+
+function scripMasterUrl(): string {
+  const override = (process.env["SCRIPMASTER_URL"] ?? "").trim();
+  return override || DEFAULT_SCRIP_MASTER_URL;
+}
+
+/**
+ * Container platforms (Railway) frequently advertise an AAAA record while the
+ * container itself has no IPv6 egress, which surfaces as ENETUNREACH /
+ * ETIMEDOUT on the very first connect. Pinning the agent to IPv4 removes that
+ * whole failure class. Set SCRIPMASTER_IP_FAMILY=0 to restore dual-stack.
+ */
+function httpsAgent(): https.Agent {
+  const family = Number(process.env["SCRIPMASTER_IP_FAMILY"] ?? 4);
+  return new https.Agent({
+    keepAlive: true,
+    ...(family === 4 || family === 6 ? { family } : {}),
+  });
+}
+
+const DOWNLOAD_ATTEMPTS = 3;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// engine/.cache/OpenAPIScripMaster.json
-const CACHE_DIR = path.resolve(__dirname, "../../../.cache");
-const CACHE_FILE = path.join(CACHE_DIR, "OpenAPIScripMaster.json");
+/**
+ * Cache location. The bundled engine directory can be read-only in a
+ * container, so a writable temp directory is used as a fallback.
+ */
+const PRIMARY_CACHE_DIR =
+  (process.env["SCRIPMASTER_CACHE_DIR"] ?? "").trim() ||
+  path.resolve(__dirname, "../../../.cache");
+
+const FALLBACK_CACHE_DIR = path.join(os.tmpdir(), "rb-live-engine-cache");
+
+const CACHE_FILENAME = "OpenAPIScripMaster.json";
+
+let cacheDir = PRIMARY_CACHE_DIR;
+
+function cacheFile(dir: string = cacheDir): string {
+  return path.join(dir, CACHE_FILENAME);
+}
 
 export interface ScripInstrument {
   token: string;
