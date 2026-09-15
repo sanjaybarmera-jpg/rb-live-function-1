@@ -227,6 +227,7 @@ async function main(): Promise<void> {
       provider: rolloverCapable as RolloverCapableProvider,
       enabled: env.ROLLOVER_ENABLED,
       intervalMs: env.ROLLOVER_CHECK_INTERVAL_MS,
+      recoveryIntervalMs: env.ROLLOVER_RECOVERY_INTERVAL_MS,
       tickConfirmTimeoutMs: env.ROLLOVER_TICK_CONFIRM_TIMEOUT_MS,
       onContractsChanged: (newContracts) => {
         const metadata: ContractMetadata[] = newContracts.map((c) => ({
@@ -246,7 +247,20 @@ async function main(): Promise<void> {
       },
     });
 
-    rollover.start(false);
+    /*
+     * Boot could not resolve a contract (ScripMaster outage, no ENV fallback):
+     * recover as soon as the network allows instead of waiting hours.
+     */
+    const needsRecovery = contracts.length === 0;
+
+    if (needsRecovery) {
+      logger.warn(
+        { recoveryIntervalMs: env.ROLLOVER_RECOVERY_INTERVAL_MS },
+        "[boot] no active contract — discovery recovery loop enabled",
+      );
+    }
+
+    rollover.start(needsRecovery);
   }
 
   let shuttingDown = false;
