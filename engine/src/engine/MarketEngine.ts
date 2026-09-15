@@ -249,11 +249,17 @@ export class MarketEngine {
         try {
           this.rates.write(tick);
 
-          await this.history
-            .write(tick)
-            .catch(() => {
-              /* Error already logged by writer */
-            });
+          /*
+           * History is NOT on the critical tick path.
+           *
+           * Its Supabase round-trip (~100-300ms) must never delay the
+           * next tick. Fire-and-forget with a catch so a rejected promise
+           * can never become an unhandled rejection / crash the engine.
+           * Throttling still lives inside RatesHistoryWriter.
+           */
+          void this.history.write(tick).catch(() => {
+            /* Error already logged by writer */
+          });
 
           this.aggregator.ingest(tick);
         } catch (err) {
