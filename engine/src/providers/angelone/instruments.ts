@@ -56,18 +56,34 @@ export function buildEnvFallback(
 ): EnvFallbackResult {
   const issues: string[] = [];
   const mappings: Record<string, MetalGroup> = {};
+  let rawEntryCount = 0;
 
   // 1. METAL_TOKEN_MAP -> token => group
   for (const entry of (rawTokenMap ?? "").split(",")) {
     const trimmed = entry.trim();
     if (!trimmed) continue;
+    rawEntryCount++;
 
     const parts = trimmed.split(":").map((p) => p.trim());
     const token = normalizeToken(parts[0] ?? "");
     const group = (parts[1] ?? "").toLowerCase();
 
-    if (!token || (group !== "gold" && group !== "silver")) {
-      issues.push(`METAL_TOKEN_MAP entry "${trimmed}" is malformed — ignored`);
+    if (!token) {
+      issues.push(`METAL_TOKEN_MAP entry "${trimmed}" has no token — ignored`);
+      continue;
+    }
+
+    if (!isAngelToken(token)) {
+      issues.push(
+        `METAL_TOKEN_MAP entry "${trimmed}" token is not a numeric Angel token — ignored`,
+      );
+      continue;
+    }
+
+    if (group !== "gold" && group !== "silver") {
+      issues.push(
+        `METAL_TOKEN_MAP entry "${trimmed}" metal must be gold or silver — ignored`,
+      );
       continue;
     }
 
@@ -88,6 +104,7 @@ export function buildEnvFallback(
   for (const entry of (rawInstruments ?? "").split(",")) {
     const trimmed = entry.trim();
     if (!trimmed) continue;
+    rawEntryCount++;
 
     const parts = trimmed.split(":").map((p) => p.trim());
 
@@ -113,6 +130,13 @@ export function buildEnvFallback(
       continue;
     }
 
+    if (!isAngelToken(token)) {
+      issues.push(
+        `ANGEL_INSTRUMENTS entry "${trimmed}" token is not a numeric Angel token — ignored`,
+      );
+      continue;
+    }
+
     push(exchangeType, token);
   }
 
@@ -126,7 +150,14 @@ export function buildEnvFallback(
   const silverToken =
     Object.keys(mappings).find((t) => mappings[t] === "silver") ?? null;
 
-  return { instruments: ordered, mappings, goldToken, silverToken, issues };
+  return {
+    instruments: ordered,
+    mappings,
+    goldToken,
+    silverToken,
+    issues,
+    rawEntryCount,
+  };
 }
 
 /**
