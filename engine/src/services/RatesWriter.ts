@@ -10,12 +10,14 @@ import {
 import { currentSessionKey, sessionKeyFor } from "./session.js";
 import { sanitizeExpiryDate } from "../utils/expiry.js";
 import {
+  recordLtpObservation,
   recordMappingFailure,
   recordTick,
   recordWriteAttempt,
   recordWriteFailure,
   recordWriteSuccess,
   recordZeroRowUpdate,
+  setPendingLatestTick,
 } from "./feedDiagnostics.js";
 
 export interface ContractMetadata {
