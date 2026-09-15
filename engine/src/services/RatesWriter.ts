@@ -36,6 +36,8 @@ interface SessionState {
   high: number;
   low: number;
   updated_at: string;
+  /** receivedTs (ms) of the tick that produced the current value. */
+  tickReceivedTs?: number;
 
   contract_symbol: string;
   contract_month: string;
@@ -225,7 +227,7 @@ export class RatesWriter {
       state.contract_month = contract.contractMonth;
       state.expiry_date = contract.expiryDate;
 
-      this.dirty.add(contract.group);
+      this.markDirty(contract.group);
     }
 
     /*
@@ -477,16 +479,23 @@ export class RatesWriter {
   start(): void {
     if (this.timer) return;
 
+    /*
+     * Writes are tick-driven (see markDirty/scheduleFlush).
+     * This interval is only a safety net that picks up a group left
+     * dirty by a failed write when no further ticks arrive.
+     */
     this.timer = setInterval(() => {
-      void this.flush();
-    }, this.flushIntervalMs);
+      for (const group of this.dirty) this.scheduleFlush(group);
+    }, RETRY_SWEEP_MS);
+
+    this.timer.unref?.();
 
     logger.info(
       {
-        flushIntervalMs:
-          this.flushIntervalMs,
+        coalesceMs: this.coalesceMs,
+        retrySweepMs: RETRY_SWEEP_MS,
       },
-      "[rates] buffered writer started",
+      "[rates] low-latency writer started",
     );
   }
 
@@ -496,10 +505,17 @@ export class RatesWriter {
       this.timer = null;
     }
 
+    for (const w of this.writes.values()) {
+      if (w.timer) {
+        clearTimeout(w.timer);
+        w.timer = null;
+      }
+    }
+
     await this.flush();
 
     logger.info(
-      "[rates] buffered writer stopped",
+      "[rates] low-latency writer stopped",
     );
   }
 
@@ -613,7 +629,9 @@ export class RatesWriter {
         "[rates] session initialized",
       );
 
-      this.dirty.add(group);
+      state.tickReceivedTs = tick.receivedTs;
+      recordLtpObservation(group, true);
+      this.markDirty(group);
 
       return;
     }
@@ -665,7 +683,7 @@ export class RatesWriter {
         state.expiry_date =
           discovered.expiryDate;
 
-        this.dirty.add(group);
+        this.markDirty(group);
       }
     }
 
@@ -742,185 +760,214 @@ export class RatesWriter {
 
     /*
      * Update live price.
+     *
+     * A genuine change (even ₹1) is always eligible for an immediate write.
+     * An identical LTP is counted as a duplicate and does NOT create a write.
      */
-    state.mcx_ltp =
-      tick.ltp;
+    const ltpChanged = state.mcx_ltp !== tick.ltp;
 
-    state.updated_at =
-      ts;
+    state.mcx_ltp = tick.ltp;
+    state.updated_at = ts;
+    state.tickReceivedTs = tick.receivedTs;
 
-    this.dirty.add(group);
+    recordLtpObservation(group, ltpChanged);
+
+    if (ltpChanged) {
+      this.markDirty(group);
+    } else if (this.dirty.has(group)) {
+      // Metadata/session change already pending — keep it scheduled.
+      this.scheduleFlush(group);
+    }
   }
 
   /**
-   * Flush pending rates to Supabase.
+   * Write one metal to Supabase.
+   *
+   * At most ONE write per metal is in flight. Ticks arriving during a write
+   * update the in-memory state, and the latest value is written immediately
+   * after the current write completes — nothing is lost, nothing piles up.
+   * Gold and Silver have fully independent state, so neither blocks the other.
    */
-  async flush(): Promise<void> {
-    if (
-      this.flushing ||
-      this.dirty.size === 0
-    ) {
+  private async flushGroup(group: MetalGroup): Promise<void> {
+    const w = this.writeStateFor(group);
+
+    if (w.inFlight) return;
+    if (!this.dirty.has(group)) return;
+
+    const state = this.sessions.get(group);
+
+    if (!state) {
+      this.dirty.delete(group);
       return;
     }
 
-    this.flushing = true;
+    this.dirty.delete(group);
+    w.inFlight = true;
+    setPendingLatestTick(group, false);
 
-    const groups =
-      Array.from(this.dirty);
-
-    this.dirty.clear();
+    const targets = metalTypesForGroup(group) as string[];
+    const startedAt = Date.now();
 
     try {
-      for (const group of groups) {
-        const state =
-          this.sessions.get(group);
+      /*
+       * SAFETY:
+       *
+       * Never send blank expiry_date to PostgreSQL.
+       */
+      const metadataValid =
+        !!state.contract_symbol &&
+        !!state.expiry_date &&
+        /^\d{4}-\d{2}-\d{2}$/.test(state.expiry_date);
 
-        if (!state) continue;
-
+      if (!metadataValid) {
         /*
-         * SAFETY:
-         *
-         * Never send blank expiry_date to PostgreSQL.
+         * Contract metadata is unusable, but the LIVE PRICE must
+         * still reach Supabase. We write price fields only and
+         * leave existing contract metadata untouched.
          */
-        const metadataValid =
-          !!state.contract_symbol &&
-          !!state.expiry_date &&
-          /^\d{4}-\d{2}-\d{2}$/.test(state.expiry_date);
-
-        if (!metadataValid) {
-          /*
-           * Contract metadata is unusable, but the LIVE PRICE must
-           * still reach Supabase. We write price fields only and
-           * leave existing contract metadata untouched.
-           */
-          logger.error(
-            {
-              group,
-              contract_symbol: state.contract_symbol,
-              contract_month: state.contract_month,
-              expiry_date: state.expiry_date,
-            },
-            "[rates] contract metadata invalid — writing price fields only",
-          );
-        }
-
-        const payload: Record<string, unknown> = {
-          mcx_ltp: state.mcx_ltp,
-          high: state.high,
-          low: state.low,
-          updated_at: state.updated_at,
-        };
-
-        if (metadataValid) {
-          payload["contract_symbol"] = state.contract_symbol;
-          payload["contract_month"] = state.contract_month;
-          payload["expiry_date"] = state.expiry_date;
-        }
-
-        const targets = metalTypesForGroup(group) as string[];
-
-        recordWriteAttempt(group);
-
-        logger.info(
+        logger.error(
           {
             group,
-            token: this.getDiscoveredContract(group)?.token,
-            mcx_ltp: state.mcx_ltp,
-            where: `metal_type IN (${targets.join(", ")})`,
-            metadataValid,
+            contract_symbol: state.contract_symbol,
+            contract_month: state.contract_month,
+            expiry_date: state.expiry_date,
           },
-          "[rates] supabase update attempt",
+          "[rates] contract metadata invalid — writing price fields only",
         );
-
-        const { data, error } =
-          await getSupabase()
-            .from("rates")
-            .update(payload)
-            .in("metal_type", targets)
-            .select("metal_type");
-
-
-        if (error) {
-          this.lastError = error.message;
-          recordWriteFailure(group, error.message);
-
-          logger.error(
-            {
-              err: error.message,
-              group,
-              where: `metal_type IN (${targets.join(", ")})`,
-            },
-            "[rates] update failed",
-          );
-
-          this.dirty.add(group);
-          continue;
-        }
-
-        const affectedRows = data?.length ?? 0;
-
-        if (affectedRows === 0) {
-          const reason = `update matched 0 rows for metal_type IN (${targets.join(", ")}) — no such rows in rates, or RLS/service-role key blocking the update`;
-
-          this.lastError = reason;
-          recordZeroRowUpdate(group, reason);
-
-          logger.error(
-            {
-              group,
-              where: `metal_type IN (${targets.join(", ")})`,
-              affectedRows: 0,
-            },
-            "[rates] update affected 0 rows — treating as FAILURE",
-          );
-
-          this.dirty.add(group);
-          continue;
-        }
-
-        recordWriteSuccess(group, affectedRows);
-
-        logger.info(
-          {
-            group,
-            affectedRows,
-            updatedMetalTypes: (data as { metal_type: string }[] | null)?.map(
-              (r) => r.metal_type,
-            ),
-            token: this.getDiscoveredContract(group)?.token,
-            mcx_ltp: state.mcx_ltp,
-            updated_at: state.updated_at,
-          },
-          "[rates] supabase update succeeded",
-        );
-
-
-        this.lastError =
-          null;
       }
-    } catch (err) {
-      this.lastError =
-        err instanceof Error
-          ? err.message
-          : String(err);
 
-      logger.error(
+      const payload: Record<string, unknown> = {
+        mcx_ltp: state.mcx_ltp,
+        high: state.high,
+        low: state.low,
+        updated_at: state.updated_at,
+      };
+
+      if (metadataValid) {
+        payload["contract_symbol"] = state.contract_symbol;
+        payload["contract_month"] = state.contract_month;
+        payload["expiry_date"] = state.expiry_date;
+      }
+
+      recordWriteAttempt(group);
+
+      logger.debug(
         {
-          err:
-            this.lastError,
+          group,
+          token: this.getDiscoveredContract(group)?.token,
+          mcx_ltp: state.mcx_ltp,
+          where: `metal_type IN (${targets.join(", ")})`,
+          metadataValid,
         },
-        "[rates] flush failed",
+        "[rates] supabase update attempt",
       );
 
-      /*
-       * Retry all groups.
-       */
-      for (const group of groups) {
+      const { data, error } = await this.db()
+        .from("rates")
+        .update(payload)
+        .in("metal_type", targets)
+        .select("metal_type");
+
+      const latencyMs = Date.now() - startedAt;
+
+      if (error) {
+        this.lastError = error.message;
+        recordWriteFailure(group, error.message);
+
+        logger.error(
+          {
+            err: error.message,
+            group,
+            where: `metal_type IN (${targets.join(", ")})`,
+            latencyMs,
+          },
+          "[rates] update failed",
+        );
+
         this.dirty.add(group);
+        this.backoff(w);
+        return;
       }
+
+      const affectedRows = data?.length ?? 0;
+
+      if (affectedRows === 0) {
+        const reason = `update matched 0 rows for metal_type IN (${targets.join(", ")}) — no such rows in rates, or RLS/service-role key blocking the update`;
+
+        this.lastError = reason;
+        recordZeroRowUpdate(group, reason);
+
+        logger.error(
+          {
+            group,
+            where: `metal_type IN (${targets.join(", ")})`,
+            affectedRows: 0,
+          },
+          "[rates] update affected 0 rows — treating as FAILURE",
+        );
+
+        this.dirty.add(group);
+        this.backoff(w);
+        return;
+      }
+
+      const tickToWriteMs = state.tickReceivedTs
+        ? startedAt - state.tickReceivedTs
+        : undefined;
+
+      recordWriteSuccess(group, affectedRows, latencyMs, tickToWriteMs);
+      w.retryDelayMs = 0;
+
+      logger.debug(
+        {
+          group,
+          affectedRows,
+          token: this.getDiscoveredContract(group)?.token,
+          mcx_ltp: state.mcx_ltp,
+          updated_at: state.updated_at,
+          tickToWriteMs,
+          dbLatencyMs: latencyMs,
+        },
+        "[rates] supabase update succeeded",
+      );
+
+      this.lastError = null;
+    } catch (err) {
+      this.lastError =
+        err instanceof Error ? err.message : String(err);
+
+      recordWriteFailure(group, this.lastError);
+
+      logger.error(
+        { err: this.lastError, group },
+        "[rates] write failed",
+      );
+
+      // Latest in-memory value is retained and retried.
+      this.dirty.add(group);
+      this.backoff(w);
     } finally {
-      this.flushing = false;
+      w.inFlight = false;
+
+      if (this.dirty.has(group)) {
+        // Newest value (or a retry) goes out as soon as allowed.
+        this.scheduleFlush(group);
+      } else {
+        setPendingLatestTick(group, false);
+      }
     }
+  }
+
+  private backoff(w: GroupWriteState): void {
+    w.retryDelayMs = Math.min(
+      w.retryDelayMs > 0 ? w.retryDelayMs * 2 : RETRY_BASE_MS,
+      RETRY_MAX_MS,
+    );
+  }
+
+  /** Flush every pending metal. Gold and Silver are written in parallel. */
+  async flush(): Promise<void> {
+    await Promise.all(GROUPS.map((group) => this.flushGroup(group)));
   }
 
   get pending(): number {
