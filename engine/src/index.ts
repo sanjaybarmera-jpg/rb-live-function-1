@@ -29,6 +29,7 @@ import {
   MetalPriceService,
   setMetalPriceService,
 } from "./services/MetalPriceService.js";
+import { SpotRatesWriter } from "./services/SpotRatesWriter.js";
 import type { Instrument } from "./providers/types.js";
 import type { ContractMetadata } from "./services/RatesWriter.js";
 
@@ -218,6 +219,8 @@ async function main(): Promise<void> {
       intervalMs: env.METALPRICE_POLL_INTERVAL_MS,
       timeoutMs: env.METALPRICE_TIMEOUT_MS,
       baseUrl: env.METALPRICE_BASE_URL,
+      // Updates ONLY the existing usd_gold / usd_silver / usd_inr rows.
+      writer: new SpotRatesWriter(),
     });
 
     setMetalPriceService(metalPrice);

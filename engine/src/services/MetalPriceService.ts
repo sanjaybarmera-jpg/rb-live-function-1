@@ -37,6 +37,14 @@ export interface MetalPriceDiagnostics {
   lastFailureAt: string | null;
   lastError: string | null;
   latest: SpotSnapshot | null;
+  /** Per-row write diagnostics for usd_gold / usd_silver / usd_inr. */
+  rows?: unknown;
+}
+
+/** Sink that persists a spot snapshot (SpotRatesWriter in production). */
+export interface SpotSnapshotSink {
+  write(snapshot: SpotSnapshot): Promise<void>;
+  snapshot?(): unknown;
 }
 
 export interface MetalPriceServiceOptions {
@@ -46,6 +54,8 @@ export interface MetalPriceServiceOptions {
   /** Request timeout in ms. */
   timeoutMs: number;
   baseUrl?: string;
+  /** Optional writer for the three existing usd_* rows in `rates`. */
+  writer?: SpotSnapshotSink;
 }
 
 interface MetalPriceResponse {
@@ -113,6 +123,7 @@ export class MetalPriceService {
       lastFailureAt: this.lastFailureAt,
       lastError: this.lastError,
       latest: this.latest,
+      rows: this.opts.writer?.snapshot?.() ?? null,
     };
   }
 
@@ -212,6 +223,21 @@ export class MetalPriceService {
         },
         "[metalprice] spot snapshot updated",
       );
+
+      /*
+       * Persist into the three EXISTING rates rows (usd_gold / usd_silver /
+       * usd_inr). Never throws — MCX writes must stay unaffected.
+       */
+      if (this.opts.writer) {
+        try {
+          await this.opts.writer.write(snapshot);
+        } catch (err) {
+          logger.warn(
+            { err: err instanceof Error ? err.message : String(err) },
+            "[metalprice] usd_* row write failed — MCX feed unaffected",
+          );
+        }
+      }
 
       return snapshot;
     } catch (err) {
