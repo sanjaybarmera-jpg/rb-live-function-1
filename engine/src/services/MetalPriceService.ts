@@ -37,6 +37,14 @@ export interface MetalPriceDiagnostics {
   lastFailureAt: string | null;
   lastError: string | null;
   latest: SpotSnapshot | null;
+  /** Per-row write diagnostics for usd_gold / usd_silver / usd_inr. */
+  rows?: unknown;
+}
+
+/** Sink that persists a spot snapshot (SpotRatesWriter in production). */
+export interface SpotSnapshotSink {
+  write(snapshot: SpotSnapshot): Promise<void>;
+  snapshot?(): unknown;
 }
 
 export interface MetalPriceServiceOptions {
@@ -46,6 +54,8 @@ export interface MetalPriceServiceOptions {
   /** Request timeout in ms. */
   timeoutMs: number;
   baseUrl?: string;
+  /** Optional writer for the three existing usd_* rows in `rates`. */
+  writer?: SpotSnapshotSink;
 }
 
 interface MetalPriceResponse {
