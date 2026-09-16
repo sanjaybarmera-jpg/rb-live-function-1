@@ -25,6 +25,10 @@ import {
 
 import { MarketEngine } from "./engine/MarketEngine.js";
 import { HealthServer } from "./services/HealthServer.js";
+import {
+  MetalPriceService,
+  setMetalPriceService,
+} from "./services/MetalPriceService.js";
 import type { Instrument } from "./providers/types.js";
 import type { ContractMetadata } from "./services/RatesWriter.js";
 
@@ -202,6 +206,28 @@ async function main(): Promise<void> {
   const health = new HealthServer(env.PORT, () => engine.snapshot());
   health.start();
 
+  /*
+   * SECONDARY source: MetalpriceAPI spot (XAU, XAG, USD/INR).
+   * Fully independent of Angel One — never writes MCX rates.
+   */
+  let metalPrice: MetalPriceService | null = null;
+
+  if (env.METALPRICE_API_KEY.trim()) {
+    metalPrice = new MetalPriceService({
+      apiKey: env.METALPRICE_API_KEY.trim(),
+      intervalMs: env.METALPRICE_POLL_INTERVAL_MS,
+      timeoutMs: env.METALPRICE_TIMEOUT_MS,
+      baseUrl: env.METALPRICE_BASE_URL,
+    });
+
+    setMetalPriceService(metalPrice);
+    metalPrice.start();
+  } else {
+    logger.warn(
+      "[metalprice] METALPRICE_API_KEY not set — secondary spot source disabled",
+    );
+  }
+
   await engine.start();
 
   // Seed rollover state
@@ -280,6 +306,7 @@ async function main(): Promise<void> {
 
     try {
       rollover?.stop();
+      metalPrice?.stop();
       await engine.stop();
       await health.stop();
     } catch (err) {

@@ -5,6 +5,7 @@ import { getRolloverState, getTickConfirmationState } from "./rollover.js";
 import { scripMasterCacheAgeMs } from "../providers/angelone/scripMaster.js";
 import { getFeedDiagnostics } from "./feedDiagnostics.js";
 import { getTokenGroups } from "./metals.js";
+import { getMetalPriceDiagnostics } from "./MetalPriceService.js";
 
 
 export interface HealthSnapshot {
@@ -52,6 +53,8 @@ export class HealthServer {
             })(),
           },
           feed: getFeedDiagnostics(),
+          // Secondary spot source — independent of the Angel One MCX feed.
+          metalprice: getMetalPriceDiagnostics(),
         };
 
         res.writeHead(200, { "Content-Type": "application/json" });
