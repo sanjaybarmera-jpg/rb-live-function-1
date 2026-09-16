@@ -48,7 +48,7 @@ export interface SpotRowDiagnostics {
   lastError: string | null;
 }
 
-/** Reject snapshots older than this (provider timestamp). Default 30 min. */
+/** Reject snapshots older than this (based on fetchedAt). Default 30 min. */
 const MAX_SNAPSHOT_AGE_MS = 30 * 60 * 1000;
 
 const ROW_IDS: SpotRowId[] = ["usd_gold", "usd_silver", "usd_inr"];
@@ -89,15 +89,20 @@ export class SpotRatesWriter {
   /**
    * Write one spot snapshot. NEVER throws — a failure here must not disturb
    * the Angel One / MCX pipeline in any way.
+   *
+   * Staleness is determined by fetchedAt (when we received the successful response),
+   * NOT by providerTimestamp (which may be older). However, updated_at is always
+   * set to fetchedAt to reflect when we actually ingested the data.
    */
   async write(snapshot: SpotSnapshot): Promise<void> {
-    const timestamp = snapshot.providerTimestamp ?? snapshot.fetchedAt;
-    const ageMs = Date.now() - Date.parse(timestamp);
+    // Check staleness based on fetchedAt (when we successfully received the response).
+    // An old providerTimestamp does not make a fresh fetch stale.
+    const ageMs = Date.now() - Date.parse(snapshot.fetchedAt);
 
     if (Number.isFinite(ageMs) && ageMs > this.maxSnapshotAgeMs) {
       for (const rowId of ROW_IDS) this.diag(rowId).skipped++;
       logger.warn(
-        { ageMs, providerTimestamp: snapshot.providerTimestamp },
+        { ageMs, fetchedAt: snapshot.fetchedAt, providerTimestamp: snapshot.providerTimestamp },
         "[metalprice] stale snapshot — usd_* rows not updated",
       );
       return;
@@ -109,8 +114,9 @@ export class SpotRatesWriter {
       ["usd_inr", snapshot.usdInr],
     ];
 
+    // Always use fetchedAt for updated_at (when we successfully received the response).
     for (const [rowId, value] of pairs) {
-      await this.updateRow(rowId, value, timestamp);
+      await this.updateRow(rowId, value, snapshot.fetchedAt);
     }
   }
 
@@ -172,7 +178,7 @@ export class SpotRatesWriter {
       d.lastError = null;
 
       logger.info(
-        { rowId, value, affectedRows: affected, providerTimestamp: timestamp },
+        { rowId, value, affectedRows: affected, fetchedAt: timestamp, providerTimestamp: snapshot?.providerTimestamp },
         `[metalprice] ${rowId} updated`,
       );
     } catch (err) {
