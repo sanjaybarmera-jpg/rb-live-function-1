@@ -306,6 +306,7 @@ async function main(): Promise<void> {
 
     try {
       rollover?.stop();
+      metalPrice?.stop();
       await engine.stop();
       await health.stop();
     } catch (err) {
