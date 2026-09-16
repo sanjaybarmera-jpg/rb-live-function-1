@@ -25,6 +25,10 @@ import {
 
 import { MarketEngine } from "./engine/MarketEngine.js";
 import { HealthServer } from "./services/HealthServer.js";
+import {
+  MetalPriceService,
+  setMetalPriceService,
+} from "./services/MetalPriceService.js";
 import type { Instrument } from "./providers/types.js";
 import type { ContractMetadata } from "./services/RatesWriter.js";
 
