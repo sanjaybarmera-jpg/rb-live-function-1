@@ -178,7 +178,7 @@ export class SpotRatesWriter {
       d.lastError = null;
 
       logger.info(
-        { rowId, value, affectedRows: affected, fetchedAt: timestamp, providerTimestamp: snapshot?.providerTimestamp },
+        { rowId, value, affectedRows: affected, updatedAt: timestamp },
         `[metalprice] ${rowId} updated`,
       );
     } catch (err) {
