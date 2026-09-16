@@ -123,6 +123,7 @@ export class MetalPriceService {
       lastFailureAt: this.lastFailureAt,
       lastError: this.lastError,
       latest: this.latest,
+      rows: this.opts.writer?.snapshot?.() ?? null,
     };
   }
 
@@ -222,6 +223,21 @@ export class MetalPriceService {
         },
         "[metalprice] spot snapshot updated",
       );
+
+      /*
+       * Persist into the three EXISTING rates rows (usd_gold / usd_silver /
+       * usd_inr). Never throws — MCX writes must stay unaffected.
+       */
+      if (this.opts.writer) {
+        try {
+          await this.opts.writer.write(snapshot);
+        } catch (err) {
+          logger.warn(
+            { err: err instanceof Error ? err.message : String(err) },
+            "[metalprice] usd_* row write failed — MCX feed unaffected",
+          );
+        }
+      }
 
       return snapshot;
     } catch (err) {
