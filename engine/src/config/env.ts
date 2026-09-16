@@ -63,6 +63,21 @@ const schema = z.object({
     .default(30_000),
 
 
+  /**
+   * MetalpriceAPI (SECONDARY spot source: XAU, XAG, USD/INR).
+   * Optional — when the key is absent the service simply stays disabled and
+   * the Angel One MCX pipeline is unaffected.
+   */
+  METALPRICE_API_KEY: z.string().default(""),
+  /** Poll interval in ms. Default 5 minutes (~288 calls/day). */
+  METALPRICE_POLL_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(30_000)
+    .default(5 * 60 * 1000),
+  METALPRICE_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+  METALPRICE_BASE_URL: z.string().default("https://api.metalpriceapi.com/v1"),
+
   ENABLED_TIMEFRAMES: z.string().default("1m"),
   HISTORY_THROTTLE_MS: z.coerce.number().int().nonnegative().default(1000),
   /** Drop ticks whose exchange timestamp is older than this (ms). 0 disables the guard. */
