@@ -117,13 +117,129 @@ test("invalid / zero values are skipped", async () => {
   );
 });
 
-test("stale snapshot updates nothing", async () => {
+// TEST A: Successful fetch + old providerTimestamp => database update MUST happen
+test("successful fetch with old providerTimestamp still updates (A)", async () => {
+  const { db, calls } = makeDb(() => 1);
+  const writer = new SpotRatesWriter(db, 30 * 60 * 1000);
+
+  const now = new Date();
+  const oldProviderTime = new Date(now.getTime() - 60 * 60 * 1000); // 1 hour old
+
+  await writer.write(
+    snap({
+      providerTimestamp: oldProviderTime.toISOString(),
+      fetchedAt: now.toISOString(),
+    }),
+  );
+
+  // Should perform 3 updates (not skip) because fetchedAt is fresh
+  assert.equal(calls.length, 3);
+  for (const d of writer.snapshot()) {
+    assert.equal(d.updates, 1);
+    assert.equal(d.failures, 0);
+    assert.equal(d.skipped, 0);
+  }
+});
+
+// TEST B: Successful fetch + current providerTimestamp => database update MUST happen
+test("successful fetch with current providerTimestamp updates (B)", async () => {
+  const { db, calls } = makeDb(() => 1);
+  const writer = new SpotRatesWriter(db, 30 * 60 * 1000);
+
+  const now = new Date().toISOString();
+
+  await writer.write(
+    snap({
+      providerTimestamp: now,
+      fetchedAt: now,
+    }),
+  );
+
+  // Should perform 3 updates
+  assert.equal(calls.length, 3);
+  for (const d of writer.snapshot()) {
+    assert.equal(d.updates, 1);
+  }
+});
+
+// TEST C: Invalid/zero/negative/NaN values => database update MUST NOT happen
+test("invalid values prevent update (C)", async () => {
+  const { db, calls } = makeDb(() => 1);
+  const writer = new SpotRatesWriter(db);
+
+  await writer.write(snap({ goldUsdPerOz: -100, silverUsdPerOz: 0, usdInr: Number.NaN }));
+
+  // No updates should occur
+  assert.equal(calls.length, 0);
+  for (const d of writer.snapshot()) {
+    assert.equal(d.updates, 0);
+    assert.equal(d.skipped, 3);
+  }
+});
+
+// TEST D: API/network failure (missing row) => database update MUST NOT happen
+test("API/network failure (missing row) => no update (D)", async () => {
+  const { db, calls } = makeDb(() => 0);
+  const writer = new SpotRatesWriter(db);
+
+  await writer.write(snap());
+
+  // All 3 rows attempt update but fail (affected = 0)
+  assert.equal(calls.length, 3);
+  for (const d of writer.snapshot()) {
+    assert.equal(d.updates, 0);
+    assert.equal(d.failures, 1);
+    assert.equal(d.lastError, "row not found");
+  }
+});
+
+// TEST E: Missing usd_* row => log error, no insert/upsert
+test("missing row logs error without insert (E)", async () => {
+  const { db, calls } = makeDb(() => 0);
+  const writer = new SpotRatesWriter(db);
+
+  await writer.write(snap());
+
+  // Verify no rows were inserted/upserted (db was only called for update/select)
+  assert.equal(calls.length, 3);
+  for (const call of calls) {
+    assert.equal(call.table, "rates");
+    assert.equal(call.column, "id");
+  }
+});
+
+// TEST F: updated_at must equal fetchedAt, not providerTimestamp
+test("updated_at equals fetchedAt, not providerTimestamp (F)", async () => {
+  const { db, calls } = makeDb(() => 1);
+  const writer = new SpotRatesWriter(db);
+
+  const oldProviderTime = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const currentFetchedTime = new Date().toISOString();
+
+  await writer.write(
+    snap({
+      providerTimestamp: oldProviderTime,
+      fetchedAt: currentFetchedTime,
+    }),
+  );
+
+  // All 3 rows should have updated_at = fetchedAt (currentFetchedTime)
+  assert.equal(calls.length, 3);
+  for (const call of calls) {
+    assert.equal(call.payload.updated_at, currentFetchedTime);
+  }
+});
+
+test("stale snapshot (old fetchedAt) updates nothing", async () => {
   const { db, calls } = makeDb(() => 1);
   const writer = new SpotRatesWriter(db, 60_000);
 
   await writer.write(
-    snap({ providerTimestamp: new Date(Date.now() - 600_000).toISOString() }),
+    snap({ fetchedAt: new Date(Date.now() - 600_000).toISOString() }),
   );
 
   assert.equal(calls.length, 0);
+  for (const d of writer.snapshot()) {
+    assert.equal(d.skipped, 1);
+  }
 });
