@@ -49,10 +49,11 @@ export class RateBroadcaster {
   }
 
   getSnapshot(): RateSnapshot {
-    return {
-      gold: this.latest.gold && { ...this.latest.gold },
-      silver: this.latest.silver && { ...this.latest.silver },
-    };
+    const out: RateSnapshot = {};
+    for (const [metal, rate] of Object.entries(this.latest)) {
+      if (rate) out[metal as Metal] = { ...rate };
+    }
+    return out;
   }
 
   subscribe(listener: RateListener): () => void {
