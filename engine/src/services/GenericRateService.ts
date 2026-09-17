@@ -249,6 +249,24 @@ export class GenericRateService {
     this.emit("gold", goldPrice, rates, receivedTs);
     this.emit("silver", silverPrice, rates, receivedTs);
 
+    /*
+     * Non-MCX spot sources. They bypass the MCX session/contract logic and
+     * are written straight to their existing RB rows (usd_* ids).
+     */
+    for (const key of ["usd_inr", "usd_gold", "usd_silver"] as const) {
+      const quote = rates.instruments[key];
+      if (!quote) continue;
+
+      try {
+        this.opts.onSpot?.(key, quote, rates.fetchedAt);
+      } catch (err) {
+        logger.error(
+          { err: err instanceof Error ? err.message : String(err), key },
+          "[RATES] spot source update failed",
+        );
+      }
+    }
+
     return rates;
   }
 

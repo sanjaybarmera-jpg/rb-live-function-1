@@ -12,6 +12,10 @@ import {
   buildParserConfig,
   isGenericApiConfigured,
 } from "./providers/genericapi/config.js";
+import {
+  UsdRatesWriter,
+  setUsdRatesWriter,
+} from "./services/UsdRatesWriter.js";
 
 async function main(): Promise<void> {
   const env = loadEnv();
