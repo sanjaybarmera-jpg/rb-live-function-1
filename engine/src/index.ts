@@ -30,6 +30,15 @@ import {
   setMetalPriceService,
 } from "./services/MetalPriceService.js";
 import { SpotRatesWriter } from "./services/SpotRatesWriter.js";
+import {
+  GenericRateService,
+  setGenericRateService,
+} from "./services/GenericRateService.js";
+import {
+  buildHttpConfig,
+  buildParserConfig,
+  isGenericApiConfigured,
+} from "./providers/genericapi/config.js";
 import type { Instrument } from "./providers/types.js";
 import type { ContractMetadata } from "./services/RatesWriter.js";
 
