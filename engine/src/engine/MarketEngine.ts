@@ -12,6 +12,7 @@ import { parseTimeframes } from "./candles/timeframes.js";
 import { RatesWriter, type ContractMetadata } from "../services/RatesWriter.js";
 import { RatesHistoryWriter } from "../services/RatesHistoryWriter.js";
 import { CandleWriter } from "../services/CandleWriter.js";
+import type { RateBroadcaster } from "../services/RateBroadcaster.js";
 
 export interface MarketEngineOptions {
   enabledTimeframes: string;
@@ -31,6 +32,9 @@ export interface MarketEngineOptions {
    * (generic HTTP rate API).
    */
   allowMissingContract?: boolean;
+
+  /** Optional shared customer-facing rate broadcaster. */
+  broadcaster?: RateBroadcaster;
 }
 
 export class MarketEngine {
@@ -68,6 +72,7 @@ export class MarketEngine {
       opts.discoveredContracts ?? [],
       undefined,
       opts.allowMissingContract ?? true,
+      opts.broadcaster,
     );
 
     this.aggregator.onCandle(({ candle, closed }) => {
