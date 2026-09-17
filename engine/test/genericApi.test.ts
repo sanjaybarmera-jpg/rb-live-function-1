@@ -3,10 +3,6 @@ import assert from "node:assert/strict";
 
 process.env["SUPABASE_URL"] ??= "https://example.supabase.co";
 process.env["SUPABASE_SERVICE_ROLE_KEY"] ??= "test";
-process.env["ANGEL_API_KEY"] ??= "test";
-process.env["ANGEL_CLIENT_CODE"] ??= "test";
-process.env["ANGEL_PIN"] ??= "1234";
-process.env["ANGEL_TOTP_SECRET"] ??= "test";
 
 const { resolvePath, toNumber } = await import(
   "../src/providers/genericapi/path.js"

@@ -1,11 +1,6 @@
 import http from "node:http";
 import { logger } from "../utils/logger.js";
-import { getDiscoveryState } from "./discoveryState.js";
-import { getRolloverState, getTickConfirmationState } from "./rollover.js";
-import { scripMasterCacheAgeMs } from "../providers/angelone/scripMaster.js";
 import { getFeedDiagnostics } from "./feedDiagnostics.js";
-import { getTokenGroups } from "./metals.js";
-import { getMetalPriceDiagnostics } from "./MetalPriceService.js";
 import { getGenericApiDiagnostics } from "./GenericRateService.js";
 
 
@@ -60,10 +55,6 @@ export class HealthServer {
             high: api.silver?.high ?? null,
             low: api.silver?.low ?? null,
           },
-          discovery: { ...getDiscoveryState(), scripMasterCacheAgeMs: scripMasterCacheAgeMs() },
-          rollover: getRolloverState(),
-          tickConfirmation: getTickConfirmationState(),
-          tokenMap: getTokenGroups(),
           supabase: {
             urlConfigured: Boolean(process.env["SUPABASE_URL"]),
             serviceRoleKeyConfigured: Boolean(process.env["SUPABASE_SERVICE_ROLE_KEY"]),
@@ -76,8 +67,6 @@ export class HealthServer {
             })(),
           },
           feed: getFeedDiagnostics(),
-          // Secondary spot source — independent of the Angel One MCX feed.
-          metalprice: getMetalPriceDiagnostics(),
         };
 
         res.writeHead(200, { "Content-Type": "application/json" });
