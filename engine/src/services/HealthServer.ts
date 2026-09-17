@@ -43,11 +43,10 @@ export class HealthServer {
           ...snap,
           // Generic (provider-agnostic) HTTP rate API status.
           api: {
-            configured: api.configured,
+            ...api,
             last_success: api.lastSuccess ?? null,
             last_error: api.lastError ?? null,
             last_update: api.lastUpdate ?? null,
-            ...api,
           },
           gold: {
             last_value: api.gold?.lastValue ?? feed.gold.lastLtp,
