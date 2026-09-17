@@ -6,6 +6,7 @@ import { scripMasterCacheAgeMs } from "../providers/angelone/scripMaster.js";
 import { getFeedDiagnostics } from "./feedDiagnostics.js";
 import { getTokenGroups } from "./metals.js";
 import { getMetalPriceDiagnostics } from "./MetalPriceService.js";
+import { getGenericApiDiagnostics } from "./GenericRateService.js";
 
 
 export interface HealthSnapshot {

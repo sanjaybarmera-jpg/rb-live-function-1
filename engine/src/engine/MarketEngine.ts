@@ -101,6 +101,14 @@ export class MarketEngine {
     this.rates.setDiscoveredContracts(contracts);
   }
 
+  /**
+   * Feed a tick produced by a non-WebSocket source (generic HTTP rate API)
+   * through the exact same validation / rate-writing pipeline.
+   */
+  ingestExternalTick(tick: Tick): void {
+    this.onTick(tick);
+  }
+
   async start(): Promise<void> {
     // Explicitly guarantee RatesWriter has the discovered contracts before session init
     if (this.opts.discoveredContracts && this.opts.discoveredContracts.length > 0) {
