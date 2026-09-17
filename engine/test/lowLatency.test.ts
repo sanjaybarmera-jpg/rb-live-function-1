@@ -4,12 +4,12 @@ import assert from "node:assert/strict";
 process.env["SUPABASE_URL"] ??= "https://example.supabase.co";
 process.env["SUPABASE_SERVICE_ROLE_KEY"] ??= "test";
 
-import { RatesWriter, type RatesDbClient } from "../src/services/RatesWriter.js";
-import { setTokenGroup } from "../src/services/metals.js";
-import {
-  getFeedDiagnostics,
-  resetFeedDiagnostics,
-} from "../src/services/feedDiagnostics.js";
+const { RatesWriter } = await import("../src/services/RatesWriter.js");
+const { setTokenGroup } = await import("../src/services/metals.js");
+const { getFeedDiagnostics, resetFeedDiagnostics } = await import(
+  "../src/services/feedDiagnostics.js"
+);
+import type { RatesDbClient } from "../src/services/RatesWriter.js";
 import type { Tick } from "../src/models/Tick.js";
 
 const GOLD_TOKEN = "466583";
