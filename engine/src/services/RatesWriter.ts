@@ -1008,4 +1008,3 @@ export class RatesWriter {
     return this.lastError === null;
   }
 }
-```
