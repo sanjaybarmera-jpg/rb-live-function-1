@@ -1,3 +1,4 @@
+```typescript
 import { logger } from "../utils/logger.js";
 import { toIso } from "../utils/time.js";
 import { getSupabase } from "./supabase.js";
@@ -19,6 +20,7 @@ import {
   recordZeroRowUpdate,
   setPendingLatestTick,
 } from "./feedDiagnostics.js";
+import type { RateBroadcaster } from "./RateBroadcaster.js";
 
 export interface ContractMetadata {
   group: MetalGroup;
@@ -123,6 +125,8 @@ export class RatesWriter {
 
   private initialized = false;
 
+  private broadcaster?: RateBroadcaster;
+
   constructor(
     private coalesceMs: number = COALESCE_MS,
     private discoveredContracts: ContractMetadata[] = [],
@@ -134,7 +138,10 @@ export class RatesWriter {
      * untouched in that case — only price fields are written.
      */
     private allowMissingContract: boolean = false,
-  ) {}
+    broadcaster?: RateBroadcaster,
+  ) {
+    this.broadcaster = broadcaster;
+  }
 
   private writeStateFor(group: MetalGroup): GroupWriteState {
     let w = this.writes.get(group);
@@ -938,6 +945,24 @@ export class RatesWriter {
       );
 
       this.lastError = null;
+
+      /*
+       * SSE BROADCAST
+       *
+       * Publish only after the customer-facing Supabase write has
+       * successfully completed. The broadcaster itself suppresses
+       * duplicate customer-facing state.
+       *
+       * This is intentionally fire-and-forget and synchronous/non-awaiting
+       * so SSE delivery can never delay or break the Supabase write path.
+       */
+      this.broadcaster?.publish({
+        metal: group,
+        ltp: state.mcx_ltp,
+        high: state.high,
+        low: state.low,
+        updated_at: state.updated_at,
+      });
     } catch (err) {
       this.lastError =
         err instanceof Error ? err.message : String(err);
@@ -984,3 +1009,4 @@ export class RatesWriter {
     return this.lastError === null;
   }
 }
+```
