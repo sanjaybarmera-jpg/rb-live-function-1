@@ -117,3 +117,20 @@ src/
 ## Environment variables
 
 See `.env.example`. All secrets come from env — never commit `.env`.
+
+## Instrument mapping (5 configurable sources)
+
+Gold Future, Silver Future, USD-INR, USD Gold and USD Silver are mapped purely
+from environment variables — no provider is referenced in code.
+
+- Matching: `*_ID` (primary, needs `RATE_API_ID_FIELD`), `*_SYMBOL` (fallback).
+  If both are configured and disagree, the instrument is rejected and the
+  mismatch is reported in `/health` instead of silently picking a wrong item.
+- Values: `*_PRICE_PATH` (LTP), `*_HIGH_PATH`, `*_LOW_PATH`. Bid/ask remain
+  supported for backward compatibility but are not required.
+- `/health` exposes `sources` with configured id/symbol, matched id/symbol,
+  LTP/high/low, last successful fetch and any mapping error.
+
+Gold and Silver continue to drive the existing RB rate pipeline, Supabase
+persistence and the SSE stream unchanged; the USD sources are parsed and
+surfaced in diagnostics.
