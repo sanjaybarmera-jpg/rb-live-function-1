@@ -2,6 +2,7 @@ import { loadEnv } from "./config/env.js";
 import { logger } from "./utils/logger.js";
 import { MarketEngine } from "./engine/MarketEngine.js";
 import { HealthServer } from "./services/HealthServer.js";
+import { RateBroadcaster } from "./services/RateBroadcaster.js";
 import {
   GenericRateService,
   setGenericRateService,
@@ -17,15 +18,22 @@ async function main(): Promise<void> {
 
   logger.info({ env: env.NODE_ENV }, "[boot] rb-live-engine starting");
 
+  const broadcaster = new RateBroadcaster();
+
   const engine = new MarketEngine({
     enabledTimeframes: env.ENABLED_TIMEFRAMES,
     historyThrottleMs: env.HISTORY_THROTTLE_MS,
     maxTickAgeMs: env.MAX_TICK_AGE_MS,
     // The generic rate API carries no futures contract — price-only writes.
     allowMissingContract: true,
+    broadcaster,
   });
 
-  const health = new HealthServer(env.PORT, () => engine.snapshot());
+  const health = new HealthServer(
+    env.PORT,
+    () => engine.snapshot(),
+    broadcaster,
+  );
   health.start();
 
   /*
