@@ -2,7 +2,10 @@ import http from "node:http";
 import { logger } from "../utils/logger.js";
 import { getFeedDiagnostics } from "./feedDiagnostics.js";
 import { getGenericApiDiagnostics } from "./GenericRateService.js";
-import type { RateBroadcaster } from "./RateBroadcaster.js";
+import type {
+  CustomerRate,
+  RateBroadcaster,
+} from "./RateBroadcaster.js";
 
 export interface HealthSnapshot {
   connected: boolean;
@@ -38,7 +41,11 @@ export class HealthServer {
       }
 
       if (path === "/stream" && req.method === "OPTIONS") {
-        if (!allowed) { res.writeHead(403); res.end(); return; }
+        if (!allowed) {
+          res.writeHead(403);
+          res.end();
+          return;
+        }
         res.writeHead(204, {
           "Access-Control-Allow-Methods": "GET, OPTIONS",
           "Access-Control-Allow-Headers": "Cache-Control",
@@ -48,23 +55,89 @@ export class HealthServer {
       }
 
       if (path === "/stream" && req.method === "GET") {
-        if (!this.broadcaster?.enabled) { res.writeHead(503); res.end(); return; }
-        if (!allowed) { res.writeHead(403); res.end(); return; }
+        if (!this.broadcaster) {
+          res.writeHead(503);
+          res.end();
+          return;
+        }
+        if (!allowed) {
+          res.writeHead(403);
+          res.end();
+          return;
+        }
+
+        const before = this.broadcaster.subscriberCount;
+        let unsubscribe: (() => void) | null = null;
+        let heartbeat: NodeJS.Timeout | null = null;
+        let closed = false;
+
+        const cleanup = (): void => {
+          if (closed) return;
+          closed = true;
+          unsubscribe?.();
+          unsubscribe = null;
+          if (heartbeat) clearInterval(heartbeat);
+          heartbeat = null;
+        };
+
+        const send = (event: "snapshot" | "rate", data: unknown): boolean => {
+          try {
+            if (res.destroyed || res.writableEnded) return false;
+            res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+            return true;
+          } catch {
+            cleanup();
+            return false;
+          }
+        };
+
+        const onRate = (rate: CustomerRate): void => {
+          if (!send("rate", rate)) cleanup();
+        };
+
+        unsubscribe = this.broadcaster.subscribe(onRate);
+        if (this.broadcaster.subscriberCount === before) {
+          unsubscribe();
+          res.writeHead(503);
+          res.end();
+          return;
+        }
 
         res.writeHead(200, {
           "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
+          "Cache-Control": "no-cache, no-transform",
           Connection: "keep-alive",
           "X-Accel-Buffering": "no",
         });
         res.flushHeaders();
-        if (!this.broadcaster.addClient(res)) {
-          res.end();
+
+        if (!send("snapshot", this.broadcaster.getSnapshot())) {
+          cleanup();
+          return;
         }
+
+        heartbeat = setInterval(() => {
+          try {
+            if (res.destroyed || res.writableEnded) {
+              cleanup();
+              return;
+            }
+            res.write(": heartbeat\n\n");
+          } catch {
+            cleanup();
+          }
+        }, 15_000);
+        heartbeat.unref?.();
+        req.once("close", cleanup);
+        res.once("close", cleanup);
+        res.once("error", cleanup);
         return;
       }
 
-      if (req.method === "GET" && (path === "/health" || path === "/healthz" || path === "/")) {
+      if (
+        req.method === "GET" &&
+        (path === "/health" || path === "/healthz" || path === "/")
+      ) {
         const snap = this.snapshot();
         const api = getGenericApiDiagnostics();
         const feed = getFeedDiagnostics();
@@ -95,8 +168,8 @@ export class HealthServer {
           },
           feed,
           sse: {
-            enabled: this.broadcaster?.enabled ?? false,
-            connected_clients: this.broadcaster?.connectedClients ?? 0,
+            enabled: Boolean(this.broadcaster),
+            connected_clients: this.broadcaster?.subscriberCount ?? 0,
           },
         };
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -114,7 +187,6 @@ export class HealthServer {
   }
 
   async stop(): Promise<void> {
-    this.broadcaster?.shutdown();
     if (!this.server) return;
     await new Promise<void>((resolve) => this.server!.close(() => resolve()));
     this.server = null;
