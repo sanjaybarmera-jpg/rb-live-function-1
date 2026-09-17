@@ -615,7 +615,7 @@ export class RatesWriter {
           sessionKey: key,
 
           token:
-            discovered.token,
+            discovered?.token ?? null,
 
           high:
             state.high,
