@@ -2,7 +2,7 @@
   "name": "rb-live-engine",
   "version": "0.1.0",
   "private": true,
-  "description": "Ratan Bullion Live Market Data Engine — standalone Node.js backend that streams Angel One SmartAPI WebSocket ticks into Supabase.",
+  "description": "Ratan Bullion Live Market Data Engine — standalone Node.js backend that polls a configurable HTTP rate API and writes live Gold/Silver rates into Supabase.",
   "type": "module",
   "main": "dist/index.js",
   "engines": {
