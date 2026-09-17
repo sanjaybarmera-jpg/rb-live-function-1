@@ -2,10 +2,7 @@ import http from "node:http";
 import { logger } from "../utils/logger.js";
 import { getFeedDiagnostics } from "./feedDiagnostics.js";
 import { getGenericApiDiagnostics } from "./GenericRateService.js";
-import type {
-  CustomerRate,
-  RateBroadcaster,
-} from "./RateBroadcaster.js";
+import type { CustomerRate, RateBroadcaster } from "./RateBroadcaster.js";
 
 export interface HealthSnapshot {
   connected: boolean;
@@ -71,16 +68,18 @@ export class HealthServer {
         let heartbeat: NodeJS.Timeout | null = null;
         let closed = false;
 
-        const cleanup = (): void => {
+        const cleanup = () => {
           if (closed) return;
           closed = true;
           unsubscribe?.();
           unsubscribe = null;
-          if (heartbeat) clearInterval(heartbeat);
-          heartbeat = null;
+          if (heartbeat) {
+            clearInterval(heartbeat);
+            heartbeat = null;
+          }
         };
 
-        const send = (event: "snapshot" | "rate", data: unknown): boolean => {
+        const sendEvent = (event: "snapshot" | "rate", data: unknown): boolean => {
           try {
             if (res.destroyed || res.writableEnded) return false;
             res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -92,12 +91,15 @@ export class HealthServer {
         };
 
         const onRate = (rate: CustomerRate): void => {
-          if (!send("rate", rate)) cleanup();
+          if (!sendEvent("rate", rate)) {
+            cleanup();
+          }
         };
 
         unsubscribe = this.broadcaster.subscribe(onRate);
+
         if (this.broadcaster.subscriberCount === before) {
-          unsubscribe();
+          unsubscribe?.();
           res.writeHead(503);
           res.end();
           return;
@@ -111,7 +113,7 @@ export class HealthServer {
         });
         res.flushHeaders();
 
-        if (!send("snapshot", this.broadcaster.getSnapshot())) {
+        if (!sendEvent("snapshot", this.broadcaster.getSnapshot())) {
           cleanup();
           return;
         }
@@ -128,16 +130,15 @@ export class HealthServer {
           }
         }, 15_000);
         heartbeat.unref?.();
+
         req.once("close", cleanup);
         res.once("close", cleanup);
         res.once("error", cleanup);
+
         return;
       }
 
-      if (
-        req.method === "GET" &&
-        (path === "/health" || path === "/healthz" || path === "/")
-      ) {
+      if (req.method === "GET" && (path === "/health" || path === "/healthz" || path === "/")) {
         const snap = this.snapshot();
         const api = getGenericApiDiagnostics();
         const feed = getFeedDiagnostics();
@@ -172,6 +173,7 @@ export class HealthServer {
             connected_clients: this.broadcaster?.subscriberCount ?? 0,
           },
         };
+
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(body, null, 2));
         return;
