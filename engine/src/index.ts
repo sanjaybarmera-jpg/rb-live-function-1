@@ -265,6 +265,9 @@ async function main(): Promise<void> {
 
   await engine.start();
 
+  // Polling starts only after the rate writer is initialized.
+  rateApi?.start();
+
   // Seed rollover state
   setActiveContracts(contracts);
 
