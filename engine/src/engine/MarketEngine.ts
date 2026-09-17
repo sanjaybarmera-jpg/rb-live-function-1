@@ -34,6 +34,12 @@ export interface MarketEngineOptions {
    * - token
    */
   discoveredContracts?: ContractMetadata[];
+
+  /**
+   * Allow price-only writes for sources that carry no futures contract
+   * (generic HTTP rate API). Angel One behaviour is unchanged.
+   */
+  allowMissingContract?: boolean;
 }
 
 export class MarketEngine {
@@ -70,6 +76,8 @@ export class MarketEngine {
     this.rates = new RatesWriter(
       undefined,
       opts.discoveredContracts ?? [],
+      undefined,
+      opts.allowMissingContract ?? false,
     );
 
     opts.provider.onTick((tick) => {
