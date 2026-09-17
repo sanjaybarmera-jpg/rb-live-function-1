@@ -1,4 +1,3 @@
-```typescript
 import { logger } from "../utils/logger.js";
 import { toIso } from "../utils/time.js";
 import { getSupabase } from "./supabase.js";
