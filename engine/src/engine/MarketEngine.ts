@@ -1,5 +1,4 @@
 import { logger } from "../utils/logger.js";
-import type { MarketDataProvider, Instrument } from "../providers/types.js";
 import type { Tick } from "../models/Tick.js";
 import {
   isStaleTick,
@@ -15,29 +14,21 @@ import { RatesHistoryWriter } from "../services/RatesHistoryWriter.js";
 import { CandleWriter } from "../services/CandleWriter.js";
 
 export interface MarketEngineOptions {
-  provider: MarketDataProvider;
-  instruments: Instrument[];
   enabledTimeframes: string;
   historyThrottleMs: number;
 
-  /** Ignore ticks whose exchange timestamp is older than this (ms). 0 disables. */
+  /** Ignore ticks whose source timestamp is older than this (ms). 0 disables. */
   maxTickAgeMs?: number;
 
   /**
-   * Contracts discovered from Angel One ScripMaster.
-   *
-   * IMPORTANT:
-   * RatesWriter uses these as the source of truth for:
-   * - contract_symbol
-   * - contract_month
-   * - expiry_date
-   * - token
+   * Optional contract metadata. The generic HTTP rate API carries no futures
+   * contract, so this normally stays empty and price-only writes are used.
    */
   discoveredContracts?: ContractMetadata[];
 
   /**
    * Allow price-only writes for sources that carry no futures contract
-   * (generic HTTP rate API). Angel One behaviour is unchanged.
+   * (generic HTTP rate API).
    */
   allowMissingContract?: boolean;
 }
@@ -51,6 +42,7 @@ export class MarketEngine {
 
   private started = Date.now();
   private tickCounter = 0;
+  private ticksReceived = 0;
   private tickReportTimer: NodeJS.Timeout | null = null;
   private candleFlushTimer: NodeJS.Timeout | null = null;
 
@@ -69,89 +61,46 @@ export class MarketEngine {
       parseTimeframes(opts.enabledTimeframes),
     );
 
-    this.history = new RatesHistoryWriter(
-      opts.historyThrottleMs,
-    );
+    this.history = new RatesHistoryWriter(opts.historyThrottleMs);
 
     this.rates = new RatesWriter(
       undefined,
       opts.discoveredContracts ?? [],
       undefined,
-      opts.allowMissingContract ?? false,
+      opts.allowMissingContract ?? true,
     );
 
-    opts.provider.onTick((tick) => {
-      this.onTick(tick);
-    });
-
     this.aggregator.onCandle(({ candle, closed }) => {
-      this.candles
-        .write(candle, closed)
-        .catch(() => {
-          /* Error already logged inside CandleWriter */
-        });
+      this.candles.write(candle, closed).catch(() => {
+        /* Error already logged inside CandleWriter */
+      });
     });
   }
 
-  /**
-   * Update the contracts known to RatesWriter.
-   * Called by automatic rollover after ScripMaster discovers a new active contract.
-   */
+  /** Update the contract metadata known to RatesWriter (optional). */
   setDiscoveredContracts(contracts: ContractMetadata[]): void {
     this.rates.setDiscoveredContracts(contracts);
   }
 
   /**
-   * Feed a tick produced by a non-WebSocket source (generic HTTP rate API)
-   * through the exact same validation / rate-writing pipeline.
+   * Feed a tick produced by the generic HTTP rate API through the existing
+   * validation / rate-writing pipeline.
    */
   ingestExternalTick(tick: Tick): void {
     this.onTick(tick);
   }
 
   async start(): Promise<void> {
-    // Explicitly guarantee RatesWriter has the discovered contracts before session init
     if (this.opts.discoveredContracts && this.opts.discoveredContracts.length > 0) {
       this.rates.setDiscoveredContracts(this.opts.discoveredContracts);
     }
 
-    logger.info(
-      {
-        provider: this.opts.provider.name,
-        discoveredContracts:
-          this.opts.discoveredContracts?.map((c) => ({
-            group: c.group,
-            token: c.token,
-            symbol: c.contractSymbol,
-            month: c.contractMonth,
-            expiry: c.expiryDate,
-          })) ?? [],
-      },
-      "[engine] starting",
-    );
+    logger.info({ source: "generic-api" }, "[engine] starting");
 
-    /*
-     * Restore today's high/low and existing contract metadata
-     * before receiving live ticks.
-     */
+    /* Restore today's high/low before receiving live rates. */
     await this.rates.init();
     this.rates.start();
 
-    /*
-     * Connect Angel One websocket.
-     */
-    await this.opts.provider.connect();
-
-    /*
-     * Subscribe to instruments selected by discovery.
-     */
-    await this.opts.provider.subscribe(
-      this.opts.instruments,
-    );
-
-    /*
-     * Tick-rate monitoring.
-     */
     this.tickReportTimer = setInterval(() => {
       logger.info(
         {
@@ -164,9 +113,6 @@ export class MarketEngine {
       this.tickCounter = 0;
     }, 60_000);
 
-    /*
-     * Keep currently-open candles persisted while live ticks are arriving.
-     */
     this.candleFlushTimer = setInterval(() => {
       if (
         this.maxTickAgeMs > 0 &&
@@ -178,9 +124,6 @@ export class MarketEngine {
       this.aggregator.flushOpen();
     }, 5_000);
 
-    /*
-     * Start processing the tick queue.
-     */
     this.drain();
   }
 
@@ -197,7 +140,6 @@ export class MarketEngine {
       this.candleFlushTimer = null;
     }
 
-    await this.opts.provider.disconnect();
     await this.rates.stop();
 
     logger.info("[engine] stopped");
@@ -208,16 +150,9 @@ export class MarketEngine {
       return;
     }
 
-    const tick = stampTick(
-      normalizeTick(raw),
-    );
+    const tick = stampTick(normalizeTick(raw));
 
-    if (
-      isStaleTick(
-        tick,
-        this.maxTickAgeMs,
-      )
-    ) {
+    if (isStaleTick(tick, this.maxTickAgeMs)) {
       this.staleTickCount++;
       const now = Date.now();
 
@@ -227,14 +162,9 @@ export class MarketEngine {
         logger.info(
           {
             symbol: tick.symbol,
-            exchangeTs: tick.exchangeTs,
-            ageSec: tick.exchangeTs
-              ? Math.floor((now - tick.exchangeTs) / 1000)
-              : undefined,
-            maxTickAgeMs: this.maxTickAgeMs,
             staleTickCount: this.staleTickCount,
           },
-          "[engine] stale tick ignored (market likely closed) — waiting for live tick",
+          "[engine] stale rate ignored — waiting for a fresh API response",
         );
       }
 
@@ -243,6 +173,7 @@ export class MarketEngine {
 
     this.lastLiveTickTs = Date.now();
     this.tickCounter++;
+    this.ticksReceived++;
     this.queue.push(tick);
 
     if (!this.draining) {
@@ -265,14 +196,7 @@ export class MarketEngine {
         try {
           this.rates.write(tick);
 
-          /*
-           * History is NOT on the critical tick path.
-           *
-           * Its Supabase round-trip (~100-300ms) must never delay the
-           * next tick. Fire-and-forget with a catch so a rejected promise
-           * can never become an unhandled rejection / crash the engine.
-           * Throttling still lives inside RatesHistoryWriter.
-           */
+          /* History is never on the critical rate path. */
           void this.history.write(tick).catch(() => {
             /* Error already logged by writer */
           });
@@ -296,21 +220,19 @@ export class MarketEngine {
   }
 
   snapshot() {
-    const status = this.opts.provider.getStatus();
-
     return {
-      connected: status.connected,
-      providerName: status.providerName,
-      currentContract: status.currentContract,
-      lastTickTime: status.lastTickTs
-        ? new Date(status.lastTickTs).toISOString()
+      connected:
+        this.lastLiveTickTs > 0 &&
+        (this.maxTickAgeMs <= 0 ||
+          Date.now() - this.lastLiveTickTs <= this.maxTickAgeMs),
+      providerName: "generic-api",
+      lastTickTime: this.lastLiveTickTs
+        ? new Date(this.lastLiveTickTs).toISOString()
         : undefined,
-      ticksReceived: status.ticksReceived,
+      ticksReceived: this.ticksReceived,
       dbStatus:
-        this.rates.healthy &&
-        this.history.healthy &&
-        this.candles.healthy,
-      reconnectCount: status.reconnectCount,
+        this.rates.healthy && this.history.healthy && this.candles.healthy,
+      reconnectCount: 0,
       engineUptimeSec: Math.floor((Date.now() - this.started) / 1000),
       staleTicksIgnored: this.staleTickCount,
       lastLiveTickTime: this.lastLiveTickTs
