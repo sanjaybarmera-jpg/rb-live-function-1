@@ -229,7 +229,6 @@ async function main(): Promise<void> {
       http: buildHttpConfig(env),
       parser: buildParserConfig(env),
       intervalMs: env.RATE_API_INTERVAL_MS,
-      timeoutMs: env.RATE_API_TIMEOUT_MS,
       maxAgeMs: env.RATE_API_MAX_AGE_MS,
       priceField: env.RATE_API_PRICE_FIELD,
       onRates: (tick) => engine.ingestExternalTick(tick),
