@@ -12,6 +12,10 @@ import {
   buildParserConfig,
   isGenericApiConfigured,
 } from "./providers/genericapi/config.js";
+import {
+  UsdRatesWriter,
+  setUsdRatesWriter,
+} from "./services/UsdRatesWriter.js";
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -43,6 +47,9 @@ async function main(): Promise<void> {
    */
   let rateApi: GenericRateService | null = null;
 
+  const usdWriter = new UsdRatesWriter(undefined, broadcaster);
+  setUsdRatesWriter(usdWriter);
+
   if (isGenericApiConfigured(env)) {
     rateApi = new GenericRateService({
       http: buildHttpConfig(env),
@@ -51,6 +58,15 @@ async function main(): Promise<void> {
       maxAgeMs: env.RATE_API_MAX_AGE_MS,
       priceField: env.RATE_API_PRICE_FIELD,
       onRates: (tick) => engine.ingestExternalTick(tick),
+      onSpot: (key, quote, fetchedAt) => {
+        void usdWriter.write({
+          id: key,
+          ltp: quote.ltp,
+          high: quote.high,
+          low: quote.low,
+          fetchedAt,
+        });
+      },
     });
 
     setGenericRateService(rateApi);

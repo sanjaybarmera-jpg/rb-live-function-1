@@ -30,8 +30,17 @@ export interface GenericRateServiceOptions {
   maxAgeMs: number;
   /** Retained for backward compatibility; LTP now comes from PRICE_PATH. */
   priceField: PriceField;
-  /** Sink into the existing RB pipeline. */
+  /** Sink into the existing RB pipeline (gold/silver MCX). */
   onRates: (tick: Tick) => void;
+  /**
+   * Sink for the non-MCX spot sources (usd_inr, usd_gold, usd_silver).
+   * The key is the RB internal rates id, never the provider id.
+   */
+  onSpot?: (
+    key: Exclude<InstrumentKey, "gold" | "silver">,
+    quote: MetalQuote,
+    fetchedAt: string,
+  ) => void;
 }
 
 export interface MetalApiDiagnostics {
@@ -239,6 +248,24 @@ export class GenericRateService {
 
     this.emit("gold", goldPrice, rates, receivedTs);
     this.emit("silver", silverPrice, rates, receivedTs);
+
+    /*
+     * Non-MCX spot sources. They bypass the MCX session/contract logic and
+     * are written straight to their existing RB rows (usd_* ids).
+     */
+    for (const key of ["usd_inr", "usd_gold", "usd_silver"] as const) {
+      const quote = rates.instruments[key];
+      if (!quote) continue;
+
+      try {
+        this.opts.onSpot?.(key, quote, rates.fetchedAt);
+      } catch (err) {
+        logger.error(
+          { err: err instanceof Error ? err.message : String(err), key },
+          "[RATES] spot source update failed",
+        );
+      }
+    }
 
     return rates;
   }

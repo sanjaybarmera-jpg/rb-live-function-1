@@ -2,7 +2,57 @@ import http from "node:http";
 import { logger } from "../utils/logger.js";
 import { getFeedDiagnostics } from "./feedDiagnostics.js";
 import { getGenericApiDiagnostics } from "./GenericRateService.js";
+import { getUsdWriteDiagnostics } from "./UsdRatesWriter.js";
 import type { CustomerRate, RateBroadcaster } from "./RateBroadcaster.js";
+
+type FeedDiagnostics = ReturnType<typeof getFeedDiagnostics>;
+type SourceDiagnostics = ReturnType<typeof getGenericApiDiagnostics>;
+
+/**
+ * Per-source view: provider id/symbol matching, parsed LTP/High/Low and the
+ * Supabase write status of the corresponding RB internal `rates` row.
+ */
+export function buildSources(
+  instruments: NonNullable<SourceDiagnostics["instruments"]>,
+  feed: FeedDiagnostics,
+): Record<string, unknown> {
+  const usd = getUsdWriteDiagnostics();
+
+  const writeStatus = (key: string): Record<string, unknown> => {
+    if (key === "gold" || key === "silver") {
+      const d = feed[key];
+      return {
+        writes: d.writesSucceeded,
+        failures: d.writesFailed,
+        affectedRows: d.lastAffectedRows,
+        lastWriteAt: d.lastSuccessfulWrite,
+        lastError: d.lastWriteError,
+      };
+    }
+
+    const s = usd?.[key as "usd_inr" | "usd_gold" | "usd_silver"];
+    return {
+      writes: s?.writes ?? 0,
+      failures: s?.failures ?? 0,
+      affectedRows: s?.affectedRows ?? null,
+      lastWriteAt: s?.lastWriteAt ?? null,
+      lastError: s?.lastError ?? null,
+    };
+  };
+
+  const out: Record<string, unknown> = {};
+
+  for (const [key, diag] of Object.entries(instruments)) {
+    out[key] = {
+      /* RB internal rates row id — never the provider id. */
+      rb_id: key,
+      ...diag,
+      write: writeStatus(key),
+    };
+  }
+
+  return out;
+}
 
 export interface HealthSnapshot {
   connected: boolean;
@@ -163,8 +213,11 @@ export class HealthServer {
             high: api.silver?.high ?? null,
             low: api.silver?.low ?? null,
           },
-          /* All five configured sources: config, matching and parsed values. */
-          sources: api.instruments ?? {},
+          /*
+           * All five configured sources: provider id/symbol matching, parsed
+           * LTP/High/Low and the Supabase write status of the RB internal row.
+           */
+          sources: buildSources(api.instruments ?? {}, feed),
           supabase: {
             urlConfigured: Boolean(process.env["SUPABASE_URL"]),
             serviceRoleKeyConfigured: Boolean(process.env["SUPABASE_SERVICE_ROLE_KEY"]),

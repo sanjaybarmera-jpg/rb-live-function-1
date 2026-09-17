@@ -1,4 +1,13 @@
-export type Metal = "gold" | "silver";
+/**
+ * RB internal rate ids broadcast over SSE.
+ * These are the Supabase `rates` row identifiers, never provider ids.
+ */
+export type Metal =
+  | "gold"
+  | "silver"
+  | "usd_inr"
+  | "usd_gold"
+  | "usd_silver";
 
 export interface CustomerRate {
   metal: Metal;
@@ -8,10 +17,7 @@ export interface CustomerRate {
   updated_at: string;
 }
 
-export interface RateSnapshot {
-  gold?: CustomerRate;
-  silver?: CustomerRate;
-}
+export type RateSnapshot = Partial<Record<Metal, CustomerRate>>;
 
 export type RateListener = (rate: CustomerRate) => void;
 
@@ -43,10 +49,11 @@ export class RateBroadcaster {
   }
 
   getSnapshot(): RateSnapshot {
-    return {
-      gold: this.latest.gold && { ...this.latest.gold },
-      silver: this.latest.silver && { ...this.latest.silver },
-    };
+    const out: RateSnapshot = {};
+    for (const [metal, rate] of Object.entries(this.latest)) {
+      if (rate) out[metal as Metal] = { ...rate };
+    }
+    return out;
   }
 
   subscribe(listener: RateListener): () => void {
