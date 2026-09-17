@@ -173,7 +173,8 @@ test("invalid values prevent update (C)", async () => {
   assert.equal(calls.length, 0);
   for (const d of writer.snapshot()) {
     assert.equal(d.updates, 0);
-    assert.equal(d.skipped, 3);
+    // one skip per row for this single invalid snapshot
+    assert.equal(d.skipped, 1);
   }
 });
 
