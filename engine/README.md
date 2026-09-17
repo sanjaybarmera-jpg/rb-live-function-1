@@ -80,3 +80,41 @@ src/
   utils/      logger, retry, time helpers
   index.ts    bootstrap
 ```
+
+## Generic HTTP rate API (provider agnostic)
+
+The engine can ingest Gold/Silver prices from **any** HTTP JSON API. No provider
+name, URL or response shape is hardcoded — switching providers is a pure
+environment-variable change, no code edit and no redeploy of new logic.
+
+Layers:
+
+- `src/providers/genericapi/httpClient.ts` — configurable URL, GET/POST, timeout
+  and auth (`none` / `query` / `header` / `bearer`).
+- `src/providers/genericapi/parser.ts` — normalizes any response into
+  `{ gold: { bid, ask, high, low }, silver: {...}, timestamp }`.
+- `src/services/GenericRateService.ts` — polls, validates, rejects stale/invalid
+  responses and feeds normalized ticks into the existing RB rate pipeline
+  (same metal IDs, premium/spread, high/low and `updated_at` behaviour).
+
+Supported response shapes (one generic parser):
+
+```jsonc
+// array + symbol lookup       -> RATE_API_ITEMS_PATH=data, GOLD_SYMBOL=India Gold, GOLD_BID_PATH=bid
+{ "data": [ { "symbol": "India Gold", "bid": 151156, "ask": 151200 } ] }
+
+// object keyed by metal       -> GOLD_BID_PATH=gold.bid
+{ "gold": { "bid": 151156 }, "silver": { "bid": 232617 } }
+
+// nested single price         -> GOLD_PRICE_PATH=result.gold.price
+{ "result": { "gold": { "price": 151156 } } }
+
+// array by index              -> GOLD_BID_PATH=data[0].bid
+{ "data": [ { "bid": 151156 }, { "bid": 232617 } ] }
+```
+
+Safety: API keys are read from environment variables only and are never logged;
+invalid, zero, non-numeric, empty or stale responses are rejected and the last
+valid rates are retained; API failures never crash the engine and never affect
+the Angel One MCX feed, candles or expiry logic. Status is exposed on `/health`
+under `api`, `gold` and `silver`.

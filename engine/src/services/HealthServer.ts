@@ -6,6 +6,7 @@ import { scripMasterCacheAgeMs } from "../providers/angelone/scripMaster.js";
 import { getFeedDiagnostics } from "./feedDiagnostics.js";
 import { getTokenGroups } from "./metals.js";
 import { getMetalPriceDiagnostics } from "./MetalPriceService.js";
+import { getGenericApiDiagnostics } from "./GenericRateService.js";
 
 
 export interface HealthSnapshot {
@@ -34,9 +35,31 @@ export class HealthServer {
       const path = (req.url ?? "/").split("?")[0];
       if (req.method === "GET" && (path === "/health" || path === "/healthz" || path === "/")) {
         const snap = this.snapshot();
+        const api = getGenericApiDiagnostics();
+        const feed = getFeedDiagnostics();
         // Additive, read-only discovery info — existing fields are untouched.
         const body = {
+          status: "ok",
           ...snap,
+          // Generic (provider-agnostic) HTTP rate API status.
+          api: {
+            ...api,
+            last_success: api.lastSuccess ?? null,
+            last_error: api.lastError ?? null,
+            last_update: api.lastUpdate ?? null,
+          },
+          gold: {
+            last_value: api.gold?.lastValue ?? feed.gold.lastLtp,
+            last_update: api.gold?.lastUpdate ?? feed.gold.lastTickTime,
+            high: api.gold?.high ?? null,
+            low: api.gold?.low ?? null,
+          },
+          silver: {
+            last_value: api.silver?.lastValue ?? feed.silver.lastLtp,
+            last_update: api.silver?.lastUpdate ?? feed.silver.lastTickTime,
+            high: api.silver?.high ?? null,
+            low: api.silver?.low ?? null,
+          },
           discovery: { ...getDiscoveryState(), scripMasterCacheAgeMs: scripMasterCacheAgeMs() },
           rollover: getRolloverState(),
           tickConfirmation: getTickConfirmationState(),

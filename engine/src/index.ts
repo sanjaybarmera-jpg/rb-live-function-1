@@ -30,6 +30,15 @@ import {
   setMetalPriceService,
 } from "./services/MetalPriceService.js";
 import { SpotRatesWriter } from "./services/SpotRatesWriter.js";
+import {
+  GenericRateService,
+  setGenericRateService,
+} from "./services/GenericRateService.js";
+import {
+  buildHttpConfig,
+  buildParserConfig,
+  isGenericApiConfigured,
+} from "./providers/genericapi/config.js";
 import type { Instrument } from "./providers/types.js";
 import type { ContractMetadata } from "./services/RatesWriter.js";
 
@@ -202,10 +211,33 @@ async function main(): Promise<void> {
     historyThrottleMs: env.HISTORY_THROTTLE_MS,
     maxTickAgeMs: env.MAX_TICK_AGE_MS,
     discoveredContracts: rateContracts,
+    // Generic API ticks carry no futures contract — price-only writes allowed.
+    allowMissingContract: isGenericApiConfigured(env),
   });
 
   const health = new HealthServer(env.PORT, () => engine.snapshot());
   health.start();
+
+  /*
+   * Generic, provider-agnostic HTTP rate API.
+   * Enabled purely by configuration (RATE_API_URL). No provider is hardcoded.
+   */
+  let rateApi: GenericRateService | null = null;
+
+  if (isGenericApiConfigured(env)) {
+    rateApi = new GenericRateService({
+      http: buildHttpConfig(env),
+      parser: buildParserConfig(env),
+      intervalMs: env.RATE_API_INTERVAL_MS,
+      maxAgeMs: env.RATE_API_MAX_AGE_MS,
+      priceField: env.RATE_API_PRICE_FIELD,
+      onRates: (tick) => engine.ingestExternalTick(tick),
+    });
+
+    setGenericRateService(rateApi);
+  } else {
+    logger.warn("[API] RATE_API_URL not set — generic rate API disabled");
+  }
 
   /*
    * SECONDARY source: MetalpriceAPI spot (XAU, XAG, USD/INR).
@@ -232,6 +264,9 @@ async function main(): Promise<void> {
   }
 
   await engine.start();
+
+  // Polling starts only after the rate writer is initialized.
+  rateApi?.start();
 
   // Seed rollover state
   setActiveContracts(contracts);
@@ -310,6 +345,7 @@ async function main(): Promise<void> {
     try {
       rollover?.stop();
       metalPrice?.stop();
+      rateApi?.stop();
       await engine.stop();
       await health.stop();
     } catch (err) {
