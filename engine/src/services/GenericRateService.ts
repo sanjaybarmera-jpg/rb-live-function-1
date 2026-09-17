@@ -30,8 +30,17 @@ export interface GenericRateServiceOptions {
   maxAgeMs: number;
   /** Retained for backward compatibility; LTP now comes from PRICE_PATH. */
   priceField: PriceField;
-  /** Sink into the existing RB pipeline. */
+  /** Sink into the existing RB pipeline (gold/silver MCX). */
   onRates: (tick: Tick) => void;
+  /**
+   * Sink for the non-MCX spot sources (usd_inr, usd_gold, usd_silver).
+   * The key is the RB internal rates id, never the provider id.
+   */
+  onSpot?: (
+    key: Exclude<InstrumentKey, "gold" | "silver">,
+    quote: MetalQuote,
+    fetchedAt: string,
+  ) => void;
 }
 
 export interface MetalApiDiagnostics {
