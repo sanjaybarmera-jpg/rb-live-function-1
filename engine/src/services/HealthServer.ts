@@ -163,6 +163,8 @@ export class HealthServer {
             high: api.silver?.high ?? null,
             low: api.silver?.low ?? null,
           },
+          /* All five configured sources: config, matching and parsed values. */
+          sources: api.instruments ?? {},
           supabase: {
             urlConfigured: Boolean(process.env["SUPABASE_URL"]),
             serviceRoleKeyConfigured: Boolean(process.env["SUPABASE_SERVICE_ROLE_KEY"]),
