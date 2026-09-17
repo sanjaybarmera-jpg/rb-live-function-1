@@ -1,6 +1,6 @@
 import type { Env } from "../../config/env.js";
 import type { HttpClientConfig } from "./httpClient.js";
-import type { ParserConfig } from "./types.js";
+import type { MetalMapping, ParserConfig } from "./types.js";
 
 /** Safely parse a JSON object from an env string; {} on anything invalid. */
 export function parseJsonRecord(raw: string): Record<string, string> {
@@ -47,33 +47,60 @@ export function buildHttpConfig(env: Env): HttpClientConfig {
   };
 }
 
-function opt(value: string): string | undefined {
-  const v = value.trim();
+function opt(value: string | undefined): string | undefined {
+  const v = (value ?? "").trim();
   return v ? v : undefined;
 }
 
+/** Build one instrument mapping from its ENV prefix (GOLD, USD_INR, ...). */
+export function buildInstrumentMapping(
+  env: Record<string, unknown>,
+  prefix: string,
+): MetalMapping {
+  const get = (suffix: string): string | undefined =>
+    opt(env[`${prefix}_${suffix}`] as string | undefined);
+
+  const mapping: MetalMapping = {};
+  const id = get("ID");
+  const symbol = get("SYMBOL");
+  const price = get("PRICE_PATH");
+  const high = get("HIGH_PATH");
+  const low = get("LOW_PATH");
+  const bid = get("BID_PATH");
+  const ask = get("ASK_PATH");
+
+  if (id) mapping.id = id;
+  if (symbol) mapping.symbol = symbol;
+  if (price) mapping.pricePath = price;
+  if (high) mapping.highPath = high;
+  if (low) mapping.lowPath = low;
+  if (bid) mapping.bidPath = bid;
+  if (ask) mapping.askPath = ask;
+
+  return mapping;
+}
+
 export function buildParserConfig(env: Env): ParserConfig {
-  return {
+  const raw = env as unknown as Record<string, unknown>;
+
+  const cfg: ParserConfig = {
     ...(opt(env.RATE_API_ITEMS_PATH) ? { itemsPath: env.RATE_API_ITEMS_PATH.trim() } : {}),
+    ...(opt(env.RATE_API_ID_FIELD) ? { idField: env.RATE_API_ID_FIELD.trim() } : {}),
     symbolField: env.RATE_API_SYMBOL_FIELD.trim() || "symbol",
     ...(opt(env.RATE_API_TIMESTAMP_PATH)
       ? { timestampPath: env.RATE_API_TIMESTAMP_PATH.trim() }
       : {}),
-    gold: {
-      ...(opt(env.GOLD_SYMBOL) ? { symbol: env.GOLD_SYMBOL.trim() } : {}),
-      ...(opt(env.GOLD_BID_PATH) ? { bidPath: env.GOLD_BID_PATH.trim() } : {}),
-      ...(opt(env.GOLD_ASK_PATH) ? { askPath: env.GOLD_ASK_PATH.trim() } : {}),
-      ...(opt(env.GOLD_HIGH_PATH) ? { highPath: env.GOLD_HIGH_PATH.trim() } : {}),
-      ...(opt(env.GOLD_LOW_PATH) ? { lowPath: env.GOLD_LOW_PATH.trim() } : {}),
-      ...(opt(env.GOLD_PRICE_PATH) ? { pricePath: env.GOLD_PRICE_PATH.trim() } : {}),
-    },
-    silver: {
-      ...(opt(env.SILVER_SYMBOL) ? { symbol: env.SILVER_SYMBOL.trim() } : {}),
-      ...(opt(env.SILVER_BID_PATH) ? { bidPath: env.SILVER_BID_PATH.trim() } : {}),
-      ...(opt(env.SILVER_ASK_PATH) ? { askPath: env.SILVER_ASK_PATH.trim() } : {}),
-      ...(opt(env.SILVER_HIGH_PATH) ? { highPath: env.SILVER_HIGH_PATH.trim() } : {}),
-      ...(opt(env.SILVER_LOW_PATH) ? { lowPath: env.SILVER_LOW_PATH.trim() } : {}),
-      ...(opt(env.SILVER_PRICE_PATH) ? { pricePath: env.SILVER_PRICE_PATH.trim() } : {}),
-    },
+    gold: buildInstrumentMapping(raw, "GOLD"),
+    silver: buildInstrumentMapping(raw, "SILVER"),
   };
+
+  const usdInr = buildInstrumentMapping(raw, "USD_INR");
+  const usdGold = buildInstrumentMapping(raw, "USD_GOLD");
+  const usdSilver = buildInstrumentMapping(raw, "USD_SILVER");
+
+  if (Object.keys(usdInr).length) cfg.usd_inr = usdInr;
+  if (Object.keys(usdGold).length) cfg.usd_gold = usdGold;
+  if (Object.keys(usdSilver).length) cfg.usd_silver = usdSilver;
+
+  return cfg;
 }
