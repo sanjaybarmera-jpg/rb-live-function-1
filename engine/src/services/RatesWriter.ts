@@ -128,6 +128,12 @@ export class RatesWriter {
     private discoveredContracts: ContractMetadata[] = [],
     private db: () => RatesDbClient = () =>
       getSupabase() as unknown as RatesDbClient,
+    /**
+     * Sources that carry no futures contract (e.g. a generic HTTP rate API)
+     * may still update the live price. Contract metadata columns stay
+     * untouched in that case — only price fields are written.
+     */
+    private allowMissingContract: boolean = false,
   ) {}
 
   private writeStateFor(group: MetalGroup): GroupWriteState {
@@ -565,7 +571,7 @@ export class RatesWriter {
        *
        * Discovery must provide the contract.
        */
-      if (!discovered) {
+      if (!discovered && !this.allowMissingContract) {
         logger.warn(
           {
             group,
@@ -589,13 +595,13 @@ export class RatesWriter {
         updated_at: ts,
 
         contract_symbol:
-          discovered.contractSymbol,
+          discovered?.contractSymbol ?? "",
 
         contract_month:
-          discovered.contractMonth,
+          discovered?.contractMonth ?? "",
 
         expiry_date:
-          discovered.expiryDate,
+          discovered?.expiryDate ?? "",
       };
 
       this.sessions.set(
