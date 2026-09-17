@@ -1,45 +1,57 @@
 import { collectObjectArrays, resolvePath, toNumber } from "./path.js";
-import type {
-  MetalMapping,
-  MetalQuote,
-  NormalizedRates,
-  ParserConfig,
+import {
+  INSTRUMENT_KEYS,
+  type InstrumentKey,
+  type MetalMapping,
+  type MetalQuote,
+  type NormalizedRates,
+  type ParserConfig,
 } from "./types.js";
 
 /**
  * Generic, configuration-driven response parser.
  *
  * No provider name, URL or response shape is hardcoded. Any JSON response can
- * be mapped using symbol lookup and/or field paths supplied by configuration.
+ * be mapped using id lookup (primary), symbol lookup (fallback) and/or field
+ * paths supplied by configuration.
  */
 
 export class ParseError extends Error {}
 
-function findBySymbol(
-  root: unknown,
-  cfg: ParserConfig,
-  symbol: string,
-): unknown | undefined {
-  const wanted = symbol.trim().toLowerCase();
-
-  const candidates: unknown[][] = [];
-
+function candidateLists(root: unknown, cfg: ParserConfig): unknown[][] {
   if (cfg.itemsPath) {
     const items = resolvePath(root, cfg.itemsPath);
-    if (Array.isArray(items)) candidates.push(items);
-  } else {
-    candidates.push(...collectObjectArrays(root));
+    return Array.isArray(items) ? [items] : [];
   }
+  return collectObjectArrays(root);
+}
 
-  for (const list of candidates) {
+function fieldString(item: unknown, field: string | undefined): string | null {
+  if (!field || !item || typeof item !== "object") return null;
+  const raw = (item as Record<string, unknown>)[field];
+  if (typeof raw === "string") return raw.trim();
+  if (typeof raw === "number") return String(raw);
+  return null;
+}
+
+function eq(a: string | null, b: string | undefined): boolean {
+  if (a === null || b === undefined) return false;
+  return a.toLowerCase() === b.trim().toLowerCase();
+}
+
+function findByField(
+  root: unknown,
+  cfg: ParserConfig,
+  field: string | undefined,
+  wanted: string,
+): unknown | undefined {
+  if (!field) return undefined;
+  for (const list of candidateLists(root, cfg)) {
     for (const item of list) {
       if (!item || typeof item !== "object") continue;
-      const raw = (item as Record<string, unknown>)[cfg.symbolField];
-      if (typeof raw !== "string") continue;
-      if (raw.trim().toLowerCase() === wanted) return item;
+      if (eq(fieldString(item, field), wanted)) return item;
     }
   }
-
   return undefined;
 }
 
@@ -56,44 +68,88 @@ function readNumber(
   return toNumber(value);
 }
 
-function parseMetal(
+/**
+ * Resolve one configured instrument. Throws ParseError with a clear reason so
+ * mapping failures surface in diagnostics instead of being silently ignored.
+ */
+export function parseInstrument(
   root: unknown,
   cfg: ParserConfig,
   mapping: MetalMapping,
   label: string,
 ): MetalQuote {
   let base: unknown = root;
+  let matchedBy: MetalQuote["matchedBy"] = "path";
 
-  if (mapping.symbol) {
-    const match = findBySymbol(root, cfg, mapping.symbol);
-    if (match === undefined && !mapping.bidPath && !mapping.pricePath) {
-      throw new ParseError(`${label}: symbol "${mapping.symbol}" not found`);
+  if (mapping.id) {
+    if (!cfg.idField) {
+      throw new ParseError(`${label}: id configured but RATE_API_ID_FIELD is not set`);
     }
-    if (match !== undefined) base = match;
+
+    const match = findByField(root, cfg, cfg.idField, mapping.id);
+    if (match === undefined) {
+      throw new ParseError(`${label}: id "${mapping.id}" not found`);
+    }
+
+    // Never silently accept a wrong instrument when both are configured.
+    if (mapping.symbol) {
+      const sym = fieldString(match, cfg.symbolField);
+      if (!eq(sym, mapping.symbol)) {
+        throw new ParseError(
+          `${label}: id/symbol mismatch — id "${mapping.id}" resolved to symbol "${sym ?? "unknown"}", expected "${mapping.symbol}"`,
+        );
+      }
+    }
+
+    base = match;
+    matchedBy = "id";
+  } else if (mapping.symbol) {
+    const match = findByField(root, cfg, cfg.symbolField, mapping.symbol);
+    if (match === undefined) {
+      if (!mapping.pricePath && !mapping.bidPath) {
+        throw new ParseError(`${label}: symbol "${mapping.symbol}" not found`);
+      }
+    } else {
+      base = match;
+      matchedBy = "symbol";
+    }
   }
 
-  const bid =
+  // LTP comes from the configured price path; bid/ask remain back-compat only.
+  const ltp =
+    readNumber(base, root, mapping.pricePath) ??
     readNumber(base, root, mapping.bidPath) ??
-    readNumber(base, root, mapping.pricePath);
+    readNumber(base, root, mapping.askPath);
 
-  if (bid === null) {
+  if (ltp === null) {
     throw new ParseError(`${label}: no numeric price found`);
   }
 
-  if (bid <= 0) {
+  if (ltp <= 0) {
     throw new ParseError(`${label}: price must be greater than zero`);
   }
 
-  const ask = readNumber(base, root, mapping.askPath);
   const high = readNumber(base, root, mapping.highPath);
   const low = readNumber(base, root, mapping.lowPath);
+  const ask = readNumber(base, root, mapping.askPath);
 
   return {
-    bid,
-    ask: ask !== null && ask > 0 ? ask : null,
+    ltp,
     high: high !== null && high > 0 ? high : null,
     low: low !== null && low > 0 ? low : null,
+    bid: ltp,
+    ask: ask !== null && ask > 0 ? ask : null,
+    matchedBy,
+    matchedId: fieldString(base, cfg.idField),
+    matchedSymbol: fieldString(base, cfg.symbolField),
   };
+}
+
+function isConfigured(mapping: MetalMapping | undefined): mapping is MetalMapping {
+  if (!mapping) return false;
+  return Boolean(
+    mapping.id || mapping.symbol || mapping.pricePath || mapping.bidPath,
+  );
 }
 
 function parseTimestamp(root: unknown, path?: string): string | null {
@@ -119,9 +175,32 @@ export function parseRates(root: unknown, cfg: ParserConfig): NormalizedRates {
     throw new ParseError("response body is not a JSON object");
   }
 
+  const instruments: NormalizedRates["instruments"] = {};
+  const errors: NormalizedRates["errors"] = {};
+
+  for (const key of INSTRUMENT_KEYS) {
+    const mapping = cfg[key] as MetalMapping | undefined;
+    if (!isConfigured(mapping)) continue;
+
+    try {
+      instruments[key] = parseInstrument(root, cfg, mapping, key);
+    } catch (err) {
+      errors[key] = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // Gold and Silver remain the required RB pipeline sources.
+  for (const key of ["gold", "silver"] as InstrumentKey[]) {
+    if (!instruments[key]) {
+      throw new ParseError(errors[key] ?? `${key}: not configured`);
+    }
+  }
+
   return {
-    gold: parseMetal(root, cfg, cfg.gold, "gold"),
-    silver: parseMetal(root, cfg, cfg.silver, "silver"),
+    gold: instruments.gold!,
+    silver: instruments.silver!,
+    instruments,
+    errors,
     timestamp: parseTimestamp(root, cfg.timestampPath),
     fetchedAt: new Date().toISOString(),
   };
