@@ -1,6 +1,9 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
+process.env["SUPABASE_URL"] ??= "https://example.supabase.co";
+process.env["SUPABASE_SERVICE_ROLE_KEY"] ??= "test";
+
 import { RatesWriter, type RatesDbClient } from "../src/services/RatesWriter.js";
 import { setTokenGroup } from "../src/services/metals.js";
 import {
