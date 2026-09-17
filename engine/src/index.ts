@@ -33,6 +33,7 @@ async function main(): Promise<void> {
     env.PORT,
     () => engine.snapshot(),
     broadcaster,
+    env.SSE_ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean),
   );
   health.start();
 
