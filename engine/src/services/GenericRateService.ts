@@ -221,6 +221,14 @@ export class GenericRateService {
     this.lastSuccess = rates.fetchedAt;
     this.lastError = null;
 
+    const mappingErrors = Object.entries(rates.errors);
+    if (mappingErrors.length > 0) {
+      logger.warn(
+        { mappingErrors: Object.fromEntries(mappingErrors) },
+        "[API] instrument mapping failed for one or more configured sources",
+      );
+    }
+
     const goldPrice = priceOf(rates.gold, this.opts.priceField);
     const silverPrice = priceOf(rates.silver, this.opts.priceField);
 
