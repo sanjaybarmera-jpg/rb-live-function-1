@@ -1,9 +1,12 @@
 import { logger } from "../utils/logger.js";
 import { fetchJson, type HttpClientConfig } from "../providers/genericapi/httpClient.js";
 import { parseRates } from "../providers/genericapi/parser.js";
-import type {
-  NormalizedRates,
-  ParserConfig,
+import {
+  INSTRUMENT_KEYS,
+  type InstrumentKey,
+  type MetalQuote,
+  type NormalizedRates,
+  type ParserConfig,
 } from "../providers/genericapi/types.js";
 import type { Tick } from "../models/Tick.js";
 
@@ -25,17 +28,24 @@ export interface GenericRateServiceOptions {
   intervalMs: number;
   /** Reject responses whose provider timestamp is older than this (0 = off). */
   maxAgeMs: number;
-  /** Which normalized field feeds the live price. */
+  /** Retained for backward compatibility; LTP now comes from PRICE_PATH. */
   priceField: PriceField;
   /** Sink into the existing RB pipeline. */
   onRates: (tick: Tick) => void;
 }
 
 export interface MetalApiDiagnostics {
+  configured: boolean;
+  configuredId: string | null;
+  configuredSymbol: string | null;
+  matchedBy: string | null;
+  matchedId: string | null;
+  matchedSymbol: string | null;
   lastValue: number | null;
   lastUpdate: string | null;
   high: number | null;
   low: number | null;
+  error: string | null;
 }
 
 export interface GenericApiDiagnostics {
@@ -54,15 +64,13 @@ export interface GenericApiDiagnostics {
   lastUpdate?: string | null;
   gold?: MetalApiDiagnostics;
   silver?: MetalApiDiagnostics;
+  instruments?: Partial<Record<InstrumentKey, MetalApiDiagnostics>>;
 }
 
-function priceOf(
-  quote: { bid: number; ask: number | null },
-  field: PriceField,
-): number {
-  if (field === "ask") return quote.ask ?? quote.bid;
-  if (field === "mid") return quote.ask ? (quote.bid + quote.ask) / 2 : quote.bid;
-  return quote.bid;
+function priceOf(quote: MetalQuote, field: PriceField): number {
+  if (field === "ask") return quote.ask ?? quote.ltp;
+  if (field === "mid") return quote.ask ? (quote.ltp + quote.ask) / 2 : quote.ltp;
+  return quote.ltp;
 }
 
 export class GenericRateService {
@@ -84,16 +92,30 @@ export class GenericRateService {
     return this.latest;
   }
 
-  diagnostics(): GenericApiDiagnostics {
-    const metal = (key: "gold" | "silver"): MetalApiDiagnostics => {
-      const q = this.latest?.[key];
-      return {
-        lastValue: q ? priceOf(q, this.opts.priceField) : null,
-        lastUpdate: this.latest?.fetchedAt ?? null,
-        high: q?.high ?? null,
-        low: q?.low ?? null,
-      };
+  private instrumentDiagnostics(key: InstrumentKey): MetalApiDiagnostics {
+    const mapping = this.opts.parser[key];
+    const q = this.latest?.instruments[key];
+
+    return {
+      configured: Boolean(mapping && Object.keys(mapping).length),
+      configuredId: mapping?.id ?? null,
+      configuredSymbol: mapping?.symbol ?? null,
+      matchedBy: q?.matchedBy ?? null,
+      matchedId: q?.matchedId ?? null,
+      matchedSymbol: q?.matchedSymbol ?? null,
+      lastValue: q ? q.ltp : null,
+      lastUpdate: this.latest?.fetchedAt ?? null,
+      high: q?.high ?? null,
+      low: q?.low ?? null,
+      error: this.latest?.errors[key] ?? null,
     };
+  }
+
+  diagnostics(): GenericApiDiagnostics {
+    const instruments: Partial<Record<InstrumentKey, MetalApiDiagnostics>> = {};
+    for (const key of INSTRUMENT_KEYS) {
+      instruments[key] = this.instrumentDiagnostics(key);
+    }
 
     return {
       configured: true,
@@ -109,8 +131,9 @@ export class GenericRateService {
       lastError: this.lastError,
       lastErrorAt: this.lastErrorAt,
       lastUpdate: this.latest?.fetchedAt ?? null,
-      gold: metal("gold"),
-      silver: metal("silver"),
+      gold: instruments.gold!,
+      silver: instruments.silver!,
+      instruments,
     };
   }
 
