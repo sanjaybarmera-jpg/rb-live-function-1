@@ -954,23 +954,7 @@ if (ltpChanged) {
 
       this.lastError = null;
 
-      /*
-       * SSE BROADCAST
-       *
-       * Publish only after the customer-facing Supabase write has
-       * successfully completed. The broadcaster itself suppresses
-       * duplicate customer-facing state.
-       *
-       * This is intentionally fire-and-forget and synchronous/non-awaiting
-       * so SSE delivery can never delay or break the Supabase write path.
-       */
-      this.broadcaster?.publish({
-        metal: group,
-        ltp: state.mcx_ltp,
-        high: state.high,
-        low: state.low,
-        updated_at: state.updated_at,
-      });
+     
     } catch (err) {
       this.lastError =
         err instanceof Error ? err.message : String(err);
