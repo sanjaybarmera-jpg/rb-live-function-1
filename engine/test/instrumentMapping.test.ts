@@ -116,6 +116,63 @@ test("backward compatible bid/ask gold+silver configuration still works", () => 
   assert.equal(rates.silver.ltp, 232617);
 });
 
+test("V5 response: id-only mappings fall back to shared bid/ask/high/low fields", () => {
+  const v5 = {
+    data: [
+      { id: "3722", symbol: "Gold Future", bid: "151156", ask: "151200", high: "151315", low: "150483" },
+      { id: "3723", symbol: "Silver Future", bid: "232617", ask: "232700", high: "233097", low: "230221" },
+      { id: "3721", symbol: "USDINR", bid: "88.42", ask: "88.44", high: "88.60", low: "88.10" },
+      { id: "3719", symbol: "USD Gold", bid: "4120.5", ask: "4121", high: "4130", low: "4100" },
+      { id: "3720", symbol: "USD Silver", bid: "52.3", ask: "52.4", high: "53", low: "51.2" },
+    ],
+  };
+  const cfg: ParserConfig = {
+    itemsPath: "data",
+    idField: "id",
+    symbolField: "symbol",
+    gold: { id: "3722" },
+    silver: { id: "3723" },
+    usd_inr: { id: "3721" },
+    usd_gold: { id: "3719" },
+    usd_silver: { id: "3720" },
+  };
+  const rates = parseRates(v5, cfg);
+
+  assert.equal(rates.instruments.gold?.ltp, 151156);
+  assert.equal(rates.instruments.gold?.high, 151315);
+  assert.equal(rates.instruments.gold?.low, 150483);
+  assert.equal(rates.instruments.gold?.ask, 151200);
+  assert.equal(rates.instruments.gold?.matchedBy, "id");
+  assert.equal(rates.instruments.silver?.ltp, 232617);
+  assert.equal(rates.instruments.silver?.high, 233097);
+  assert.equal(rates.instruments.usd_inr?.ltp, 88.42);
+  assert.equal(rates.instruments.usd_inr?.low, 88.1);
+  assert.equal(rates.instruments.usd_gold?.ltp, 4120.5);
+  assert.equal(rates.instruments.usd_gold?.high, 4130);
+  assert.equal(rates.instruments.usd_silver?.ltp, 52.3);
+  assert.equal(rates.instruments.usd_silver?.low, 51.2);
+  assert.deepEqual(rates.errors, {});
+});
+
+test("explicit PRICE_PATH still wins over the shared bid/ask fallback", () => {
+  const v5 = {
+    data: [
+      { id: "3722", symbol: "Gold Future", bid: "100", ask: "101", high: "110", low: "90", ltp: "105" },
+      { id: "3723", symbol: "Silver Future", bid: "200", ask: "201", high: "210", low: "190" },
+    ],
+  };
+  const cfg: ParserConfig = {
+    itemsPath: "data",
+    idField: "id",
+    symbolField: "symbol",
+    gold: { id: "3722", pricePath: "ltp", highPath: "high", lowPath: "low" },
+    silver: { id: "3723" },
+  };
+  const rates = parseRates(v5, cfg);
+  assert.equal(rates.gold.ltp, 105);
+  assert.equal(rates.silver.ltp, 200);
+});
+
 test("instrument mapping is built from ENV prefixes", () => {
   const mapping = buildInstrumentMapping(
     {
