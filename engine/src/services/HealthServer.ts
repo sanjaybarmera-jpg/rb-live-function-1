@@ -129,16 +129,20 @@ export class HealthServer {
           }
         };
 
-        const sendEvent = (event: "snapshot" | "rate", data: unknown): boolean => {
-          try {
-            if (res.destroyed || res.writableEnded) return false;
-            res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-            return true;
-          } catch {
-            cleanup();
-            return false;
-          }
-        };
+       const sendEvent = (event: "snapshot" | "rate", data: unknown): boolean => {
+  try {
+    if (res.destroyed || res.writableEnded) return false;
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    // 🚀 FIX: प्रॉक्सी और सॉकेट बफ़र को तुरंत फ़्लश करें
+    if (typeof (res as any).flush === "function") {
+      (res as any).flush();
+    }
+    return true;
+  } catch {
+    cleanup();
+    return false;
+  }
+};
 
         const onRate = (rate: CustomerRate): void => {
           if (!sendEvent("rate", rate)) {
