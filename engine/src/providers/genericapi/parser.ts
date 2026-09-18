@@ -116,10 +116,15 @@ export function parseInstrument(
   }
 
   // LTP comes from the configured price path; bid/ask remain back-compat only.
+  // When an instrument matched by id/symbol but no explicit path resolved a
+  // value, fall back to the shared/default price fields (bid, then ask).
   const ltp =
     readNumber(base, root, mapping.pricePath) ??
     readNumber(base, root, mapping.bidPath) ??
-    readNumber(base, root, mapping.askPath);
+    readNumber(base, root, mapping.askPath) ??
+    (matchedBy !== "path"
+      ? readNumber(base, root, "bid") ?? readNumber(base, root, "ask")
+      : null);
 
   if (ltp === null) {
     throw new ParseError(`${label}: no numeric price found`);
@@ -129,9 +134,12 @@ export function parseInstrument(
     throw new ParseError(`${label}: price must be greater than zero`);
   }
 
-  const high = readNumber(base, root, mapping.highPath);
-  const low = readNumber(base, root, mapping.lowPath);
-  const ask = readNumber(base, root, mapping.askPath);
+  // Explicit high/low paths win; matched items fall back to the shared
+  // default field names "high"/"low".
+  const defaultHilo = matchedBy !== "path";
+  const high = readNumber(base, root, mapping.highPath ?? (defaultHilo ? "high" : undefined));
+  const low = readNumber(base, root, mapping.lowPath ?? (defaultHilo ? "low" : undefined));
+  const ask = readNumber(base, root, mapping.askPath ?? (defaultHilo ? "ask" : undefined));
 
   return {
     ltp,
