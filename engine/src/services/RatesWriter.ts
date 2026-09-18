@@ -776,16 +776,25 @@ export class RatesWriter {
      * A genuine change (even ₹1) is always eligible for an immediate write.
      * An identical LTP is counted as a duplicate and does NOT create a write.
      */
-    const ltpChanged = state.mcx_ltp !== tick.ltp;
+  const ltpChanged = state.mcx_ltp !== tick.ltp;
 
-    state.mcx_ltp = tick.ltp;
-    state.updated_at = ts;
-    state.tickReceivedTs = tick.receivedTs;
+state.mcx_ltp = tick.ltp;
+state.updated_at = ts;
+state.tickReceivedTs = tick.receivedTs;
 
-    recordLtpObservation(group, ltpChanged);
+recordLtpObservation(group, ltpChanged);
 
-    if (ltpChanged) {
-      this.markDirty(group);
+if (ltpChanged) {
+  // 🚀 FIX: टिक आते ही मिलीसेकंड में ब्रॉडकास्ट (DB write से पहले)
+  this.broadcaster?.publish({
+    metal: group,
+    ltp: state.mcx_ltp,
+    high: state.high,
+    low: state.low,
+    updated_at: state.updated_at,
+  });
+
+  this.markDirty(group);
     } else if (this.dirty.has(group)) {
       // Metadata/session change already pending — keep it scheduled.
       this.scheduleFlush(group);
