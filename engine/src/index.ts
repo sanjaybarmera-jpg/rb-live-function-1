@@ -16,6 +16,7 @@ import {
   UsdRatesWriter,
   setUsdRatesWriter,
 } from "./services/UsdRatesWriter.js";
+import { resolveAllActiveContracts } from "./services/McxContractResolver.js";
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -75,6 +76,25 @@ async function main(): Promise<void> {
       "[API] RATE_API_URL not set — no live rate source configured, no rates will be written",
     );
   }
+
+  // Calendar-based MCX contract metadata (price delivery is unaffected).
+  try {
+    const initialContracts = resolveAllActiveContracts();
+    engine.setDiscoveredContracts(initialContracts);
+    logger.info({ contracts: initialContracts }, "[rollover] initial contracts resolved");
+  } catch (err) {
+    logger.error({ err }, "[rollover] initial resolution failed");
+  }
+
+  const rolloverTimer = setInterval(() => {
+    try {
+      engine.setDiscoveredContracts(resolveAllActiveContracts());
+    } catch (err) {
+      logger.error({ err }, "[rollover] check failed");
+    }
+  }, 60 * 60 * 1000);
+
+  rolloverTimer.unref?.();
 
   await engine.start();
 
