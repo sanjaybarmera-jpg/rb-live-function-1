@@ -117,6 +117,7 @@ async function main(): Promise<void> {
     force.unref();
 
     try {
+      clearInterval(rolloverTimer);
       rateApi?.stop();
       await engine.stop();
       await health.stop();
