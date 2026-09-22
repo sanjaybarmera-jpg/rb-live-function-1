@@ -16,6 +16,7 @@ import {
   UsdRatesWriter,
   setUsdRatesWriter,
 } from "./services/UsdRatesWriter.js";
+import { resolveAllActiveContracts } from "./services/McxContractResolver.js";
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -76,6 +77,25 @@ async function main(): Promise<void> {
     );
   }
 
+  // Calendar-based MCX contract metadata (price delivery is unaffected).
+  try {
+    const initialContracts = resolveAllActiveContracts();
+    engine.setDiscoveredContracts(initialContracts);
+    logger.info({ contracts: initialContracts }, "[rollover] initial contracts resolved");
+  } catch (err) {
+    logger.error({ err }, "[rollover] initial resolution failed");
+  }
+
+  const rolloverTimer = setInterval(() => {
+    try {
+      engine.setDiscoveredContracts(resolveAllActiveContracts());
+    } catch (err) {
+      logger.error({ err }, "[rollover] check failed");
+    }
+  }, 60 * 60 * 1000);
+
+  rolloverTimer.unref?.();
+
   await engine.start();
 
   // Polling starts only after the rate writer is initialized.
@@ -97,6 +117,7 @@ async function main(): Promise<void> {
     force.unref();
 
     try {
+      clearInterval(rolloverTimer);
       rateApi?.stop();
       await engine.stop();
       await health.stop();
