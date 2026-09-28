@@ -166,13 +166,9 @@ export class UsdRatesWriter {
       s.lastError = null;
       this.lastWritten.set(id, fingerprint);
 
-      this.broadcaster?.publish({
-        metal: id,
-        ltp: input.ltp,
-        high: input.high ?? input.ltp,
-        low: input.low ?? input.ltp,
-        updated_at: input.fetchedAt,
-      });
+      /* Already broadcast before the write — RateBroadcaster dedups anyway. */
+
+
 
       return true;
     } catch (err) {
