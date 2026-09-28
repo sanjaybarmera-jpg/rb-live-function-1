@@ -159,13 +159,18 @@ export class HealthServer {
           return;
         }
 
+        req.socket?.setNoDelay(true);
+        res.socket?.setNoDelay(true);
+
         res.writeHead(200, {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache, no-transform",
           Connection: "keep-alive",
           "X-Accel-Buffering": "no",
+          "Content-Encoding": "none",
         });
         res.flushHeaders();
+
 
         if (!sendEvent("snapshot", this.broadcaster.getSnapshot())) {
           cleanup();
