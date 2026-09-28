@@ -100,6 +100,20 @@ export class UsdRatesWriter {
     const fingerprint = `${input.ltp}|${input.high}|${input.low}`;
     if (this.lastWritten.get(id) === fingerprint) return false;
 
+    /*
+     * Zero-latency broadcast: publish to SSE subscribers immediately, before
+     * the Supabase round-trip, mirroring RatesWriter's behaviour for gold/silver.
+     */
+    this.broadcaster?.publish({
+      metal: id,
+      ltp: input.ltp,
+      high: input.high ?? input.ltp,
+      low: input.low ?? input.ltp,
+      updated_at: input.fetchedAt,
+    });
+
+
+
     const payload: Record<string, unknown> = {
       mcx_ltp: input.ltp,
       /* Existing behaviour for the USD rows: buy = sell = LTP (no premium). */
