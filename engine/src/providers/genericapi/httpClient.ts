@@ -29,6 +29,9 @@ export class HttpError extends Error {}
 export async function fetchJson(cfg: HttpClientConfig): Promise<unknown> {
   const headers: Record<string, string> = {
     Accept: "application/json",
+    /* Strictly bypass upstream/CDN caches — stale quotes are unusable. */
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    Pragma: "no-cache",
     ...(cfg.headers ?? {}),
   };
 
@@ -39,6 +42,9 @@ export async function fetchJson(cfg: HttpClientConfig): Promise<unknown> {
     if (cfg.authType === "header") headers[cfg.keyName] = cfg.apiKey;
     if (cfg.authType === "bearer") headers["Authorization"] = `Bearer ${cfg.apiKey}`;
   }
+
+  /* Cache-buster: unique per request so no edge proxy can replay a response. */
+  params["_t"] = String(Date.now());
 
   const request: AxiosRequestConfig = {
     url: cfg.url,
